@@ -206,6 +206,18 @@ function loadNavigatorAudioRecording() {
     if (navigator.mediaDevices.getUserMedia) {
         console.debug(DEBUG_PREFIX + ' getUserMedia supported by browser.');
         const micButton = $('#microphone_button');
+        const micClickHandler = function () {
+            micButton.off('click');
+            navigator.mediaDevices.getUserMedia(constraints).then(function (s) {
+                onSuccess(s);
+                if (!audioRecording) {
+                    mediaRecorder.start();
+                    console.debug(DEBUG_PREFIX + 'recorder started, state: ' + mediaRecorder.state);
+                    audioRecording = true;
+                    activateMicIcon(micButton);
+                }
+            }, onError);
+        };
 
         let onSuccess = function (stream) {
             const isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
@@ -231,12 +243,21 @@ function loadNavigatorAudioRecording() {
                 },
             };
 
-            new VAD(settings);
+            // only create VAD if voice activation is ON
+            if (extension_settings.speech_recognition.voiceActivationEnabled) {
+                new VAD(settings);
+            }
 
             mediaRecorder = new MediaRecorder(stream);
 
             micButton.off('click').on('click', function () {
                 if (!audioRecording) {
+                    if (!mediaRecorder) {
+                        // go back through the same init path
+                        micButton.off('click');
+                        navigator.mediaDevices.getUserMedia(constraints).then(onSuccess, onError);
+                        return;
+                    }
                     mediaRecorder.start();
                     console.debug(DEBUG_PREFIX + mediaRecorder.state);
                     console.debug(DEBUG_PREFIX + 'recorder started');
@@ -265,9 +286,19 @@ function loadNavigatorAudioRecording() {
                 const wavBlob = await convertAudioBufferToWavBlob(audioBuffer);
                 const transcript = await sttProvider.processAudio(wavBlob);
 
-                // TODO: lock and release recording while processing?
                 console.debug(DEBUG_PREFIX + 'received transcript:', transcript);
                 processTranscript(transcript);
+
+                // If voice activation is OFF, release mic after each recording
+                if (!extension_settings.speech_recognition.voiceActivationEnabled) {
+                    try {
+                        mediaRecorder.stream.getTracks().forEach(t => t.stop());
+                    } catch (e) {
+                        console.error(DEBUG_PREFIX + 'error stopping media stream tracks:', e);
+                    }
+                    mediaRecorder = null;
+                    micButton.off('click').on('click', micClickHandler);
+                }
             };
 
             mediaRecorder.ondataavailable = function (e) {
@@ -279,7 +310,12 @@ function loadNavigatorAudioRecording() {
             console.debug(DEBUG_PREFIX + 'The following error occured: ' + err);
         };
 
-        navigator.mediaDevices.getUserMedia(constraints).then(onSuccess, onError);
+        // only open mic immediately if voice activation is enabled
+        if (extension_settings.speech_recognition.voiceActivationEnabled) {
+            navigator.mediaDevices.getUserMedia(constraints).then(onSuccess, onError);
+        } else {
+            micButton.off('click').on('click', micClickHandler);
+        }
 
     } else {
         console.debug(DEBUG_PREFIX + 'getUserMedia not supported on your browser!');
@@ -496,7 +532,31 @@ async function onMessageMappingEnabledClick() {
 }
 
 function onVoiceActivationEnabledChange() {
-    extension_settings.speech_recognition.voiceActivationEnabled = !!$('#speech_recognition_voice_activation_enabled').prop('checked');
+    const enabled = !!$('#speech_recognition_voice_activation_enabled').prop('checked');
+    extension_settings.speech_recognition.voiceActivationEnabled = enabled;
+
+    const micButton = $('#microphone_button');
+
+    if (enabled) {
+        micButton.off('click');
+        loadNavigatorAudioRecording();
+    } else {
+        if (!audioRecording) {
+            if (mediaRecorder && mediaRecorder.stream) {
+                try {
+                    mediaRecorder.stream.getTracks().forEach(t => t.stop());
+                } catch (e) {
+                    console.error(DEBUG_PREFIX + 'error stopping media stream tracks:', e);
+                }
+            }
+            mediaRecorder = null;
+
+            // rebind to the lazy handler
+            micButton.off('click');
+            loadNavigatorAudioRecording();
+        }
+    }
+
     saveSettingsDebounced();
 }
 
