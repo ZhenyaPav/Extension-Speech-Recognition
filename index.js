@@ -429,12 +429,14 @@ function loadNavigatorAudioRecording() {
             mediaStream = stream;
             const source = audioContext.createMediaStreamSource(stream);
             
-            // Get VAD sensitivity from settings (default to 0.5 if not set)
+            // Get VAD settings from defaults if not set
             const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
+            const adaptiveVad = extension_settings.speech_recognition.adaptiveVad !== false; // Default to true
             
             const settings = {
                 source: source,
                 sensitivity: sensitivity,
+                adaptiveVad: adaptiveVad,
                 voice_start: function () {
                     if (!audioRecording && extension_settings.speech_recognition.voiceActivationEnabled) {
                         console.debug(DEBUG_PREFIX + 'Voice started - beginning buffered recording');
@@ -798,6 +800,18 @@ function onVoiceActivationEnabledChange() {
     saveSettingsDebounced();
 }
 
+function onAdaptiveVadChange() {
+    const enabled = !!$('#speech_recognition_adaptive_vad').prop('checked');
+    extension_settings.speech_recognition.adaptiveVad = enabled;
+    
+    // Update VAD instance if it exists
+    if (vadInstance && vadInstance.options) {
+        vadInstance.options.adaptiveVad = enabled;
+    }
+    
+    saveSettingsDebounced();
+}
+
 function onVadSensitivityChange() {
     const sensitivity = parseFloat($('#speech_recognition_vad_sensitivity').val());
     extension_settings.speech_recognition.vadSensitivity = sensitivity;
@@ -1153,6 +1167,12 @@ $(document).ready(function () {
                         </div>
                         <span id="speech_volume_text">Volume: 0%</span>
                     </div>
+                    <div id="speech_recognition_adaptive_vad_div" title="Enable adaptive VAD that adjusts to background noise. Disable for simple threshold-based detection.">
+                        <label class="checkbox_label" for="speech_recognition_adaptive_vad">
+                            <input type="checkbox" id="speech_recognition_adaptive_vad" name="speech_recognition_adaptive_vad" checked>
+                            <small>Enable adaptive VAD</small>
+                        </label>
+                    </div>
                     <div id="speech_recognition_vad_sensitivity_div" title="Adjust VAD sensitivity. Lower values make it more sensitive to voice, higher values make it less sensitive.">
                         <span>VAD Sensitivity</span> </br>
                         <input type="range" id="speech_recognition_vad_sensitivity" min="0" max="1" step="0.1" value="0.5" class="text_pole">
@@ -1199,6 +1219,7 @@ $(document).ready(function () {
         $('#speech_recognition_language').on('change', onSttLanguageChange);
         $('#speech_recognition_message_mapping_enabled').on('click', onMessageMappingEnabledClick);
         $('#speech_recognition_voice_activation_enabled').on('change', onVoiceActivationEnabledChange);
+        $('#speech_recognition_adaptive_vad').on('change', onAdaptiveVadChange);
         $('#speech_recognition_vad_sensitivity').on('input', onVadSensitivityChange);
         $('#speech_recognition_buffer_size').on('input', onBufferSizeChange);
         $('#speech_recognition_tail_duration').on('input', onTailDurationChange);

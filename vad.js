@@ -42,6 +42,7 @@ export var VAD = function (options) {
         energy_threshold_ratio_neg: 0.5, // Signal must be half the offset
         energy_integration: 1, // Size of integration change compared to the signal per second.
         sensitivity: 0.5, // New sensitivity setting (0-1, where 0.5 is default)
+        adaptiveVad: true, // Enable adaptive VAD (default: true)
         filter: [
             { f: 200, v: 0 }, // 0 -> 200 is 0
             { f: 2000, v: 1 } // 200 -> 2k is 1
@@ -219,8 +220,14 @@ export var VAD = function (options) {
         // Integration brings in the real-time aspect through the relationship with the frequency this functions is called.
         var integration = signal * this.iterationPeriod * this.options.energy_integration;
 
-        // Reduce adaptive behavior when sensitivity is high (user wants more control)
-        var adaptationRate = Math.max(0.1, 1.0 - this.options.sensitivity); // Less adaptation at high sensitivity
+        // Only apply adaptive behavior if enabled
+        if (this.options.adaptiveVad) {
+            // Reduce adaptive behavior when sensitivity is high (user wants more control)
+            var adaptationRate = Math.max(0.1, 1.0 - this.options.sensitivity); // Less adaptation at high sensitivity
+        } else {
+            // No adaptation when adaptive VAD is disabled
+            var adaptationRate = 0;
+        }
         
         // The !end limits the offset delta boost till after the end is detected.
         if (integration > 0 || !end) {
