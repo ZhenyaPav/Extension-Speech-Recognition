@@ -55,6 +55,8 @@ let vadInstance = null;
 let audioContext = null;
 let mediaStream = null;
 let bufferProcessor = null;
+let isBuffering = false;
+let bufferStartTime = 0;
 
 async function moduleWorker() {
     if (sttProviderName != 'Streaming') {
@@ -166,12 +168,56 @@ function postProcessText(text) {
 }
 
 // VAD Buffering Functions
+function startContinuousBuffering() {
+    if (isBuffering) return;
+    
+    console.debug(DEBUG_PREFIX + 'Starting continuous buffering for pre-roll');
+    
+    // Create a separate MediaRecorder for continuous buffering
+    if (!bufferProcessor) {
+        bufferProcessor = new MediaRecorder(mediaStream, { mimeType: 'audio/webm;codecs=opus' });
+        
+        bufferProcessor.ondataavailable = function (e) {
+            if (e.data.size > 0) {
+                circularBuffer.push({
+                    data: e.data,
+                    timestamp: Date.now()
+                });
+                
+                // Keep only the last bufferSize milliseconds of data
+                const cutoffTime = Date.now() - bufferSize;
+                circularBuffer = circularBuffer.filter(chunk => chunk.timestamp > cutoffTime);
+            }
+        };
+        
+        // Request data frequently to get small chunks
+        bufferProcessor.start(100); // Get data every 100ms
+    }
+    
+    isBuffering = true;
+    bufferStartTime = Date.now();
+}
+
+function stopContinuousBuffering() {
+    if (!isBuffering) return;
+    
+    console.debug(DEBUG_PREFIX + 'Stopping continuous buffering');
+    
+    if (bufferProcessor && bufferProcessor.state === 'recording') {
+        bufferProcessor.stop();
+        bufferProcessor = null;
+    }
+    
+    isBuffering = false;
+    circularBuffer = [];
+}
+
 function startRecordingWithBuffer() {
     if (audioRecording) return;
     
     console.debug(DEBUG_PREFIX + 'Starting recording with pre-roll buffer');
     
-    // Start MediaRecorder
+    // Start MediaRecorder for actual recording
     if (!mediaRecorder) {
         mediaRecorder = new MediaRecorder(mediaStream);
         
@@ -185,6 +231,17 @@ function startRecordingWithBuffer() {
     }
     
     audioChunks = [];
+    
+    // Add pre-roll buffer chunks first if available
+    if (circularBuffer.length > 0) {
+        console.debug(DEBUG_PREFIX + `Adding ${circularBuffer.length} pre-roll chunks`);
+        // Sort by timestamp and add to recording
+        circularBuffer.sort((a, b) => a.timestamp - b.timestamp);
+        circularBuffer.forEach(chunk => {
+            audioChunks.push(chunk.data);
+        });
+    }
+    
     mediaRecorder.start();
     audioRecording = true;
     activateMicIcon($('#microphone_button'));
@@ -287,12 +344,15 @@ function updateVolumeIndicator(volumeData) {
     } else {
         // Calculate static threshold when adaptive mode is off
         // Use same logarithmic scale logic as VAD for consistency
-        const threshold = extension_settings.speech_recognition.vadSensitivity || 0.5;
+        const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
         // Map sensitivity (0-1) to log energy range: -8 (high sensitivity) to -2 (low sensitivity)
         const minLog = -8;
         const maxLog = -2;
-        const targetLogEnergy = minLog + (threshold * (maxLog - minLog));
-        thresholdForDisplay = Math.pow(10, targetLogEnergy);
+        const targetLogEnergy = minLog + (sensitivity * (maxLog - minLog));
+        const fixedThreshold = Math.pow(10, targetLogEnergy);
+        
+        // Use the same threshold calculation as VAD for non-adaptive mode
+        thresholdForDisplay = fixedThreshold * 0.5; // Signal must be 50% above threshold
     }
     
     const logThreshold = Math.log10(Math.max(1e-10, thresholdForDisplay));
@@ -486,6 +546,8 @@ function loadNavigatorAudioRecording() {
             // only create VAD if voice activation is ON
             if (extension_settings.speech_recognition.voiceActivationEnabled) {
                 vadInstance = new VAD(settings);
+                // Start continuous buffering for pre-roll
+                startContinuousBuffering();
             }
 
             mediaRecorder = new MediaRecorder(stream);
@@ -656,6 +718,15 @@ function deactivateMicIcon(micButton) {
 
 function stopCurrentProvider() {
     console.debug(DEBUG_PREFIX + 'stop current provider');
+    
+    // Stop continuous buffering
+    stopContinuousBuffering();
+    
+    // Stop VAD instance
+    if (vadInstance) {
+        vadInstance = null;
+    }
+    
     if (mediaRecorder) {
         mediaRecorder.onstop = null;
         mediaRecorder.ondataavailable = null;
@@ -741,7 +812,7 @@ function loadSettings() {
     // Load VAD sensitivity setting
     const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
     $('#speech_recognition_vad_sensitivity').val(sensitivity);
-    $('#speech_recognition_vad_sensitivity_value').text(sensitivity.toFixed(1));
+    $('#speech_recognition_vad_sensitivity_value').text(sensitivity.toFixed(2));
     
     // Load buffer size setting
     const bufferSizeSeconds = extension_settings.speech_recognition.bufferSize || 1.0;
@@ -825,6 +896,9 @@ function onVoiceActivationEnabledChange() {
         micButton.off('click');
         loadNavigatorAudioRecording();
     } else {
+        // Stop continuous buffering when voice activation is disabled
+        stopContinuousBuffering();
+        
         if (!audioRecording) {
             if (mediaRecorder && mediaRecorder.stream) {
                 try {
@@ -908,7 +982,7 @@ function onAdaptiveVadChange() {
 function onVadSensitivityChange() {
     const sensitivity = parseFloat($('#speech_recognition_vad_sensitivity').val());
     extension_settings.speech_recognition.vadSensitivity = sensitivity;
-    $('#speech_recognition_vad_sensitivity_value').text(sensitivity.toFixed(1));
+    $('#speech_recognition_vad_sensitivity_value').text(sensitivity.toFixed(2));
     
     // Update VAD instance if it exists
     if (vadInstance && vadInstance.options) {
@@ -1279,8 +1353,8 @@ $(document).ready(function () {
                     </div>
                     <div id="speech_recognition_vad_sensitivity_div" title="Adjust recording activation threshold. Lower values make it more sensitive to voice, higher values make it less sensitive.">
                         <span>Recording Activation Threshold</span> </br>
-                        <input type="range" id="speech_recognition_vad_sensitivity" min="0" max="1" step="0.1" value="0.5" class="text_pole">
-                        <span id="speech_recognition_vad_sensitivity_value">0.5</span>
+                        <input type="range" id="speech_recognition_vad_sensitivity" min="0" max="1" step="0.01" value="0.5" class="text_pole">
+                        <span id="speech_recognition_vad_sensitivity_value">0.50</span>
                     </div>
                     <div id="speech_recognition_post_processing_div" title="Configure text post-processing options.">
                         <span>Text Replacements</span>
