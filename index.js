@@ -286,13 +286,13 @@ function updateVolumeIndicator(volumeData) {
         thresholdForDisplay = volumeData.threshold;
     } else {
         // Calculate static threshold when adaptive mode is off
-        // Map threshold (0.0 to 1.0) to energy range
+        // Use same logarithmic scale logic as VAD for consistency
         const threshold = extension_settings.speech_recognition.vadSensitivity || 0.5;
-        // Map 0.0-1.0 to energy range: 1e-6 (high sensitivity) to 1e-4 (low sensitivity)
-        // This gives us the full range from very sensitive to barely sensitive
-        const minEnergy = 1e-6;
-        const maxEnergy = 1e-4;
-        thresholdForDisplay = minEnergy + (threshold * (maxEnergy - minEnergy));
+        // Map sensitivity (0-1) to log energy range: -8 (high sensitivity) to -2 (low sensitivity)
+        const minLog = -8;
+        const maxLog = -2;
+        const targetLogEnergy = minLog + (threshold * (maxLog - minLog));
+        thresholdForDisplay = Math.pow(10, targetLogEnergy);
     }
     
     const logThreshold = Math.log10(Math.max(1e-10, thresholdForDisplay));
@@ -453,11 +453,12 @@ function loadNavigatorAudioRecording() {
             // Calculate threshold for non-adaptive mode
             let threshold;
             if (!adaptiveVad) {
-                // Map threshold (0.0 to 1.0) to energy range
-                // Map 0.0-1.0 to energy range: 1e-6 (high sensitivity) to 1e-4 (low sensitivity)
-                const minEnergy = 1e-6;
-                const maxEnergy = 1e-4;
-                threshold = minEnergy + (sensitivity * (maxEnergy - minEnergy));
+                // Use same logarithmic scale logic as VAD for consistency
+                // Map sensitivity (0-1) to log energy range: -8 (high sensitivity) to -2 (low sensitivity)
+                const minLog = -8;
+                const maxLog = -2;
+                const targetLogEnergy = minLog + (sensitivity * (maxLog - minLog));
+                threshold = Math.pow(10, targetLogEnergy);
             }
             
             const settings = {
@@ -864,9 +865,12 @@ function onAdaptiveVadChange() {
         // Calculate threshold for non-adaptive mode
         let threshold;
         if (!adaptiveVad) {
-            const minEnergy = 1e-6;
-            const maxEnergy = 1e-4;
-            threshold = minEnergy + (sensitivity * (maxEnergy - minEnergy));
+            // Use same logarithmic scale logic as VAD for consistency
+            // Map sensitivity (0-1) to log energy range: -8 (high sensitivity) to -2 (low sensitivity)
+            const minLog = -8;
+            const maxLog = -2;
+            const targetLogEnergy = minLog + (sensitivity * (maxLog - minLog));
+            threshold = Math.pow(10, targetLogEnergy);
         }
         
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -912,9 +916,12 @@ function onVadSensitivityChange() {
         
         // Update threshold for non-adaptive mode
         if (!vadInstance.options.adaptiveVad) {
-            const minEnergy = 1e-6;
-            const maxEnergy = 1e-4;
-            const threshold = minEnergy + (sensitivity * (maxEnergy - minEnergy));
+            // Use same logarithmic scale logic as VAD for consistency
+            // Map sensitivity (0-1) to log energy range: -8 (high sensitivity) to -2 (low sensitivity)
+            const minLog = -8;
+            const maxLog = -2;
+            const targetLogEnergy = minLog + (sensitivity * (maxLog - minLog));
+            const threshold = Math.pow(10, targetLogEnergy);
             vadInstance.options.threshold = threshold;
         }
     }

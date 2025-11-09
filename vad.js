@@ -202,8 +202,12 @@ export var VAD = function (options) {
             adjusted_threshold_neg = this.energy_threshold_neg * sensitivityMultiplier;
         } else {
             // Non-adaptive mode: use fixed threshold based on sensitivity
-            // Map sensitivity (0-1) to energy range: 1e-6 (high sensitivity) to 1e-4 (low sensitivity)
-            var fixedThreshold = 1e-6 + (this.options.sensitivity * (1e-4 - 1e-6));
+            // Use same logarithmic scale logic as updateVolumeIndicator for consistency
+            // Map sensitivity (0-1) to log energy range: -8 (high sensitivity) to -2 (low sensitivity)
+            var minLog = -8;
+            var maxLog = -2;
+            var targetLogEnergy = minLog + (this.options.sensitivity * (maxLog - minLog));
+            var fixedThreshold = Math.pow(10, targetLogEnergy);
             signal = energy - fixedThreshold;
             
             // Use fixed thresholds based on the fixed threshold
