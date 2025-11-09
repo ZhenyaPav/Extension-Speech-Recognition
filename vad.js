@@ -191,7 +191,7 @@ export var VAD = function (options) {
 
         // Apply sensitivity adjustment (0.0 = least sensitive, 1.0 = most sensitive)
         // Higher sensitivity = lower threshold multiplier (easier to trigger)
-        var sensitivityMultiplier = 3.0 - (this.options.sensitivity * 2.5); // Range: 3.0 to 0.5 (inverted, more range)
+        var sensitivityMultiplier = 5.0 - (this.options.sensitivity * 4.5); // Range: 5.0 to 0.5 (much more range)
         var adjusted_threshold_pos = this.energy_threshold_pos * sensitivityMultiplier;
         var adjusted_threshold_neg = this.energy_threshold_neg * sensitivityMultiplier;
 

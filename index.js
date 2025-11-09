@@ -278,7 +278,21 @@ function updateVolumeIndicator(volumeData) {
     // Calculate volume percentage using logarithmic scale for better visualization
     // Energy values are typically very small, so we use log scale
     const logEnergy = Math.log10(Math.max(1e-10, volumeData.energy));
-    const logThreshold = Math.log10(Math.max(1e-10, volumeData.threshold));
+    
+    // Calculate threshold based on current VAD settings
+    let thresholdForDisplay;
+    if (extension_settings.speech_recognition.adaptiveVad) {
+        // Use the actual threshold from VAD when adaptive mode is on
+        thresholdForDisplay = volumeData.threshold;
+    } else {
+        // Calculate static threshold when adaptive mode is off
+        const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
+        const sensitivityMultiplier = 5.0 - (sensitivity * 4.5); // Range: 5.0 to 0.5 (much more range)
+        const baseThreshold = 1e-8 * 2; // energy_offset * energy_threshold_ratio_pos
+        thresholdForDisplay = baseThreshold * sensitivityMultiplier;
+    }
+    
+    const logThreshold = Math.log10(Math.max(1e-10, thresholdForDisplay));
     const minLog = -8; // Minimum expected log energy
     const maxLog = -2; // Maximum expected log energy
     
