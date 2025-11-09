@@ -302,9 +302,35 @@ function updateVolumeIndicator(volumeData) {
         volumeBar.css('background-color', '#44ff44'); // Green for idle
     }
     
-    // Update text
+    // Update text with more detailed information
     if (volumeText.length > 0) {
-        volumeText.text(`Volume: ${Math.round(volumePercent)}%${volumeData.willTrigger ? ' (TRIGGER)' : volumeData.currentState ? ' (RECORDING)' : ''}`);
+        const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
+        let statusText = `Volume: ${Math.round(volumePercent)}%`;
+        
+        if (volumeData.willTrigger) {
+            statusText += ' (TRIGGER)';
+        } else if (volumeData.currentState) {
+            statusText += ' (RECORDING)';
+        }
+        
+        // Add debug info in development
+        if (extension_settings.speech_recognition.debug) {
+            statusText += ` | Sens: ${sensitivity.toFixed(1)}`;
+        }
+        
+        volumeText.text(statusText);
+    }
+    
+    // Debug logging for VAD behavior
+    if (extension_settings.speech_recognition.debug && (volumeData.willTrigger || volumeData.currentState)) {
+        console.debug(DEBUG_PREFIX + 'VAD Update:', {
+            energy: volumeData.energy.toExponential(2),
+            threshold: volumeData.threshold.toExponential(2),
+            signal: volumeData.signal.toExponential(2),
+            willTrigger: volumeData.willTrigger,
+            currentState: volumeData.currentState,
+            sensitivity: (extension_settings.speech_recognition.vadSensitivity || 0.5).toFixed(2)
+        });
     }
 }
 

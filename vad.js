@@ -189,7 +189,8 @@ export var VAD = function (options) {
         var signal = energy - this.energy_offset;
 
         // Apply sensitivity adjustment (0.0 = least sensitive, 1.0 = most sensitive)
-        var sensitivityMultiplier = 3.0 - (this.options.sensitivity * 2.0); // Range: 3.0 to 1.0 (inverted)
+        // Higher sensitivity = lower threshold multiplier (easier to trigger)
+        var sensitivityMultiplier = 3.0 - (this.options.sensitivity * 2.5); // Range: 3.0 to 0.5 (inverted, more range)
         var adjusted_threshold_pos = this.energy_threshold_pos * sensitivityMultiplier;
         var adjusted_threshold_neg = this.energy_threshold_neg * sensitivityMultiplier;
 
@@ -218,13 +219,14 @@ export var VAD = function (options) {
         // Integration brings in the real-time aspect through the relationship with the frequency this functions is called.
         var integration = signal * this.iterationPeriod * this.options.energy_integration;
 
-        // Idea?: The integration is affected by the voiceTrend magnitude? - Not sure. Not doing atm.
-
+        // Reduce adaptive behavior when sensitivity is high (user wants more control)
+        var adaptationRate = Math.max(0.1, 1.0 - this.options.sensitivity); // Less adaptation at high sensitivity
+        
         // The !end limits the offset delta boost till after the end is detected.
         if (integration > 0 || !end) {
-            this.energy_offset += integration;
+            this.energy_offset += integration * adaptationRate;
         } else {
-            this.energy_offset += integration * 10;
+            this.energy_offset += integration * 10 * adaptationRate;
         }
         this.energy_offset = this.energy_offset < 0 ? 0 : this.energy_offset;
         this.energy_threshold_pos = this.energy_offset * this.options.energy_threshold_ratio_pos;
