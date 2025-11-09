@@ -512,7 +512,15 @@ function loadNavigatorAudioRecording() {
                 const transcript = await sttProvider.processAudio(wavBlob);
 
                 console.debug(DEBUG_PREFIX + 'received transcript:', transcript);
-                processTranscript(transcript);
+                
+                // Apply post-processing
+                const processedTranscript = postProcessText(transcript);
+                
+                if (processedTranscript && processedTranscript.trim().length > 0) {
+                    processTranscript(processedTranscript);
+                } else {
+                    console.debug(DEBUG_PREFIX + 'Empty transcript after post-processing, ignoring');
+                }
 
                 // If voice activation is OFF, release mic after each recording
                 if (!extension_settings.speech_recognition.voiceActivationEnabled) {
