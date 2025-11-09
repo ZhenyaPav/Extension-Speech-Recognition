@@ -149,9 +149,14 @@ function postProcessText(text) {
     
     let processed = text;
     
-    // Remove square brackets and content within them if enabled
-    if (extension_settings.speech_recognition.removeBrackets !== false) {
-        processed = processed.replace(/\[.*?\]/g, '');
+    // Apply custom text replacements
+    if (extension_settings.speech_recognition.textReplacements) {
+        const replacements = extension_settings.speech_recognition.textReplacements;
+        for (const [find, replace] of Object.entries(replacements)) {
+            // Global case-insensitive replacement
+            const regex = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+            processed = processed.replace(regex, replace);
+        }
     }
     
     // Clean up extra whitespace
@@ -266,15 +271,27 @@ async function processRecordedAudio() {
 function updateVolumeIndicator(volumeData) {
     const volumeBar = $('#speech_volume_bar');
     const volumeText = $('#speech_volume_text');
+    const thresholdBar = $('#speech_threshold_bar');
     
     if (volumeBar.length === 0) return;
     
-    // Calculate volume percentage (0-100)
-    const maxVolume = 0.01; // Adjust based on testing
-    const volumePercent = Math.min(100, Math.max(0, (volumeData.energy / maxVolume) * 100));
+    // Calculate volume percentage using logarithmic scale for better visualization
+    // Energy values are typically very small, so we use log scale
+    const logEnergy = Math.log10(Math.max(1e-10, volumeData.energy));
+    const logThreshold = Math.log10(Math.max(1e-10, volumeData.threshold));
+    const minLog = -8; // Minimum expected log energy
+    const maxLog = -2; // Maximum expected log energy
     
-    // Update bar
+    const volumePercent = Math.min(100, Math.max(0, ((logEnergy - minLog) / (maxLog - minLog)) * 100));
+    const thresholdPercent = Math.min(100, Math.max(0, ((logThreshold - minLog) / (maxLog - minLog)) * 100));
+    
+    // Update main volume bar
     volumeBar.css('width', volumePercent + '%');
+    
+    // Update threshold indicator bar
+    if (thresholdBar.length > 0) {
+        thresholdBar.css('left', thresholdPercent + '%');
+    }
     
     // Update color based on state
     if (volumeData.willTrigger) {
@@ -676,6 +693,14 @@ function loadSettings() {
     // Load post-processing settings
     const removeBrackets = extension_settings.speech_recognition.removeBrackets !== false; // Default to true
     $('#speech_recognition_remove_brackets').prop('checked', removeBrackets);
+    
+    // Load text replacements
+    if (extension_settings.speech_recognition.textReplacements) {
+        const replacementLines = Object.entries(extension_settings.speech_recognition.textReplacements)
+            .map(([find, replace]) => `${find} = ${replace}`)
+            .join('\n');
+        $('#speech_recognition_text_replacements').val(replacementLines);
+    }
 }
 
 async function onMessageModeChange() {
@@ -785,6 +810,28 @@ function onTailDurationChange() {
 function onRemoveBracketsChange() {
     const enabled = !!$('#speech_recognition_remove_brackets').prop('checked');
     extension_settings.speech_recognition.removeBrackets = enabled;
+    saveSettingsDebounced();
+}
+
+function onTextReplacementsChange() {
+    const text = $('#speech_recognition_text_replacements').val();
+    const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    
+    extension_settings.speech_recognition.textReplacements = {};
+    
+    for (const line of lines) {
+        if (line.includes('=')) {
+            const [find, replace] = line.split('=').map(part => part.trim());
+            if (find && find.length > 0) {
+                extension_settings.speech_recognition.textReplacements[find] = replace || '';
+                console.debug(DEBUG_PREFIX + 'Added text replacement:', find, '=>', replace || '(remove)');
+            }
+        } else {
+            console.debug(DEBUG_PREFIX + 'Invalid text replacement format, missing "=":', line);
+        }
+    }
+    
+    console.debug(DEBUG_PREFIX + 'Updated text replacements:', extension_settings.speech_recognition.textReplacements);
     saveSettingsDebounced();
 }
 
@@ -1062,11 +1109,6 @@ $(document).ready(function () {
                             <small>Enable activation by voice</small>
                         </label>
                     </div>
-                    <div id="speech_recognition_vad_sensitivity_div" title="Adjust VAD sensitivity. Lower values make it more sensitive to voice, higher values make it less sensitive.">
-                        <span>VAD Sensitivity</span> </br>
-                        <input type="range" id="speech_recognition_vad_sensitivity" min="0" max="1" step="0.1" value="0.5" class="text_pole">
-                        <span id="speech_recognition_vad_sensitivity_value">0.5</span>
-                    </div>
                     <div id="speech_recognition_buffer_size_div" title="Adjust pre-roll buffer size. Amount of audio to capture before speech is detected.">
                         <span>Pre-roll Buffer (seconds)</span> </br>
                         <input type="range" id="speech_recognition_buffer_size" min="0" max="2" step="0.1" value="1.0" class="text_pole">
@@ -1079,16 +1121,21 @@ $(document).ready(function () {
                     </div>
                     <div id="speech_recognition_volume_indicator_div" title="Shows current audio volume level and VAD trigger status.">
                         <span>Volume Indicator</span> </br>
-                        <div style="width: 100%; height: 20px; background-color: #333; border-radius: 10px; overflow: hidden;">
+                        <div style="width: 100%; height: 20px; background-color: #333; border-radius: 10px; overflow: hidden; position: relative;">
                             <div id="speech_volume_bar" style="height: 100%; width: 0%; background-color: #44ff44; transition: width 0.1s, background-color 0.1s;"></div>
+                            <div id="speech_threshold_bar" style="position: absolute; top: 0; width: 2px; height: 100%; background-color: rgba(255, 255, 255, 0.8); left: 50%; transition: left 0.1s;"></div>
                         </div>
                         <span id="speech_volume_text">Volume: 0%</span>
                     </div>
+                    <div id="speech_recognition_vad_sensitivity_div" title="Adjust VAD sensitivity. Lower values make it more sensitive to voice, higher values make it less sensitive.">
+                        <span>VAD Sensitivity</span> </br>
+                        <input type="range" id="speech_recognition_vad_sensitivity" min="0" max="1" step="0.1" value="0.5" class="text_pole">
+                        <span id="speech_recognition_vad_sensitivity_value">0.5</span>
+                    </div>
                     <div id="speech_recognition_post_processing_div" title="Configure text post-processing options.">
-                        <label class="checkbox_label" for="speech_recognition_remove_brackets">
-                            <input type="checkbox" id="speech_recognition_remove_brackets" name="speech_recognition_remove_brackets" checked>
-                            <small>Remove square brackets and content [like this]</small>
-                        </label>
+                        <span>Text Replacements</span>
+                        <textarea id="speech_recognition_text_replacements" class="text_pole textarea_compact" type="text" rows="3" placeholder="Enter text replacements, one per line:\nfind text = replace with\nNoah = Nova\n[remove this] = "></textarea>
+                        <small style="opacity: 0.7;">Format: "find = replace" (leave replacement empty to remove)</small>
                     </div>
                     <div id="speech_recognition_message_mode_div">
                         <span>Message Mode</span> </br>
@@ -1130,6 +1177,7 @@ $(document).ready(function () {
         $('#speech_recognition_buffer_size').on('input', onBufferSizeChange);
         $('#speech_recognition_tail_duration').on('input', onTailDurationChange);
         $('#speech_recognition_remove_brackets').on('change', onRemoveBracketsChange);
+        $('#speech_recognition_text_replacements').on('change', onTextReplacementsChange);
         $('#speech_recognition_ptt').on('focus', function () {
             if (this instanceof HTMLInputElement) {
                 this.value = 'Enter a key combo. "Escape" to clear';

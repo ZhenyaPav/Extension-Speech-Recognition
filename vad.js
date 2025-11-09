@@ -188,8 +188,8 @@ export var VAD = function (options) {
         var energy = this.getEnergy();
         var signal = energy - this.energy_offset;
 
-        // Apply sensitivity adjustment (0.0 = most sensitive, 1.0 = least sensitive)
-        var sensitivityMultiplier = 1.0 + (this.options.sensitivity * 2.0); // Range: 1.0 to 3.0
+        // Apply sensitivity adjustment (0.0 = least sensitive, 1.0 = most sensitive)
+        var sensitivityMultiplier = 3.0 - (this.options.sensitivity * 2.0); // Range: 3.0 to 1.0 (inverted)
         var adjusted_threshold_pos = this.energy_threshold_pos * sensitivityMultiplier;
         var adjusted_threshold_neg = this.energy_threshold_neg * sensitivityMultiplier;
 
