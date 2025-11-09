@@ -847,13 +847,56 @@ function onAdaptiveVadChange() {
     const enabled = !!$('#speech_recognition_adaptive_vad').prop('checked');
     extension_settings.speech_recognition.adaptiveVad = enabled;
     
-    // Update VAD instance if it exists
-    if (vadInstance && vadInstance.options) {
-        vadInstance.options.adaptiveVad = enabled;
-    }
-    
     // Show/hide sensitivity slider based on adaptive VAD setting
     $('#speech_recognition_vad_sensitivity_div').toggle(!enabled);
+    
+    // Restart VAD instance with new settings if voice activation is enabled
+    if (extension_settings.speech_recognition.voiceActivationEnabled && mediaStream) {
+        // Stop current VAD instance
+        if (vadInstance) {
+            vadInstance = null;
+        }
+        
+        // Recreate VAD with updated settings
+        const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
+        const adaptiveVad = enabled;
+        
+        // Calculate threshold for non-adaptive mode
+        let threshold;
+        if (!adaptiveVad) {
+            const minEnergy = 1e-6;
+            const maxEnergy = 1e-4;
+            threshold = minEnergy + (sensitivity * (maxEnergy - minEnergy));
+        }
+        
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaStreamSource(mediaStream);
+        
+        const settings = {
+            source: source,
+            sensitivity: sensitivity,
+            adaptiveVad: adaptiveVad,
+            threshold: threshold,
+            voice_start: function () {
+                if (!audioRecording && extension_settings.speech_recognition.voiceActivationEnabled) {
+                    console.debug(DEBUG_PREFIX + 'Voice started - beginning buffered recording');
+                    startRecordingWithBuffer();
+                }
+            },
+            voice_stop: function () {
+                if (audioRecording && extension_settings.speech_recognition.voiceActivationEnabled) {
+                    console.debug(DEBUG_PREFIX + 'Voice stopped - starting tail timeout');
+                    startTailTimeout();
+                }
+            },
+            voice_volume_update: function (volumeData) {
+                updateVolumeIndicator(volumeData);
+            },
+        };
+        
+        vadInstance = new VAD(settings);
+        console.debug(DEBUG_PREFIX + 'VAD restarted with adaptiveVad:', adaptiveVad);
+    }
     
     saveSettingsDebounced();
 }

@@ -221,12 +221,13 @@ export var VAD = function (options) {
         var integration = signal * this.iterationPeriod * this.options.energy_integration;
 
         // Only apply adaptive behavior if enabled
+        var adaptationRate;
         if (this.options.adaptiveVad) {
             // Reduce adaptive behavior when sensitivity is high (user wants more control)
-            var adaptationRate = Math.max(0.1, 1.0 - this.options.sensitivity); // Less adaptation at high sensitivity
+            adaptationRate = Math.max(0.1, 1.0 - this.options.sensitivity); // Less adaptation at high sensitivity
         } else {
             // No adaptation when adaptive VAD is disabled
-            var adaptationRate = 0;
+            adaptationRate = 0;
         }
         
         // The !end limits the offset delta boost till after the end is detected.
