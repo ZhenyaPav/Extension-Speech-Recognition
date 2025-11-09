@@ -187,13 +187,29 @@ export var VAD = function (options) {
 
     this.monitor = function () {
         var energy = this.getEnergy();
-        var signal = energy - this.energy_offset;
-
-        // Apply sensitivity adjustment (0.0 = least sensitive, 1.0 = most sensitive)
-        // Higher sensitivity = lower threshold multiplier (easier to trigger)
-        var sensitivityMultiplier = 5.0 - (this.options.sensitivity * 4.5); // Range: 5.0 to 0.5 (much more range)
-        var adjusted_threshold_pos = this.energy_threshold_pos * sensitivityMultiplier;
-        var adjusted_threshold_neg = this.energy_threshold_neg * sensitivityMultiplier;
+        
+        // Use different threshold calculation based on adaptive mode
+        var signal, adjusted_threshold_pos, adjusted_threshold_neg;
+        
+        if (this.options.adaptiveVad) {
+            // Adaptive mode: use dynamic energy_offset
+            signal = energy - this.energy_offset;
+            
+            // Apply sensitivity adjustment (0.0 = least sensitive, 1.0 = most sensitive)
+            // Higher sensitivity = lower threshold multiplier (easier to trigger)
+            var sensitivityMultiplier = 5.0 - (this.options.sensitivity * 4.5); // Range: 5.0 to 0.5 (much more range)
+            adjusted_threshold_pos = this.energy_threshold_pos * sensitivityMultiplier;
+            adjusted_threshold_neg = this.energy_threshold_neg * sensitivityMultiplier;
+        } else {
+            // Non-adaptive mode: use fixed threshold based on sensitivity
+            // Map sensitivity (0-1) to energy range: 1e-6 (high sensitivity) to 1e-4 (low sensitivity)
+            var fixedThreshold = 1e-6 + (this.options.sensitivity * (1e-4 - 1e-6));
+            signal = energy - fixedThreshold;
+            
+            // Use fixed thresholds based on the fixed threshold
+            adjusted_threshold_pos = fixedThreshold * 0.5; // Signal must be 50% above threshold
+            adjusted_threshold_neg = fixedThreshold * 0.3; // Signal must be 30% below threshold
+        }
 
         if (signal > adjusted_threshold_pos) {
             this.voiceTrend = (this.voiceTrend + 1 > this.voiceTrendMax) ? this.voiceTrendMax : this.voiceTrend + 1;
@@ -217,28 +233,24 @@ export var VAD = function (options) {
             end = true;
         }
 
-        // Integration brings in the real-time aspect through the relationship with the frequency this functions is called.
-        var integration = signal * this.iterationPeriod * this.options.energy_integration;
-
         // Only apply adaptive behavior if enabled
-        var adaptationRate;
         if (this.options.adaptiveVad) {
+            // Integration brings in the real-time aspect through the relationship with the frequency this functions is called.
+            var integration = signal * this.iterationPeriod * this.options.energy_integration;
+            
             // Reduce adaptive behavior when sensitivity is high (user wants more control)
-            adaptationRate = Math.max(0.1, 1.0 - this.options.sensitivity); // Less adaptation at high sensitivity
-        } else {
-            // No adaptation when adaptive VAD is disabled
-            adaptationRate = 0;
+            var adaptationRate = Math.max(0.1, 1.0 - this.options.sensitivity); // Less adaptation at high sensitivity
+            
+            // The !end limits the offset delta boost till after the end is detected.
+            if (integration > 0 || !end) {
+                this.energy_offset += integration * adaptationRate;
+            } else {
+                this.energy_offset += integration * 10 * adaptationRate;
+            }
+            this.energy_offset = this.energy_offset < 0 ? 0 : this.energy_offset;
+            this.energy_threshold_pos = this.energy_offset * this.options.energy_threshold_ratio_pos;
+            this.energy_threshold_neg = this.energy_offset * this.options.energy_threshold_ratio_neg;
         }
-        
-        // The !end limits the offset delta boost till after the end is detected.
-        if (integration > 0 || !end) {
-            this.energy_offset += integration * adaptationRate;
-        } else {
-            this.energy_offset += integration * 10 * adaptationRate;
-        }
-        this.energy_offset = this.energy_offset < 0 ? 0 : this.energy_offset;
-        this.energy_threshold_pos = this.energy_offset * this.options.energy_threshold_ratio_pos;
-        this.energy_threshold_neg = this.energy_offset * this.options.energy_threshold_ratio_neg;
 
         // Broadcast volume update
         if (this.options.voice_volume_update) {
@@ -261,6 +273,9 @@ export var VAD = function (options) {
             this.options.voice_stop();
         }
 
+        var integration = this.options.adaptiveVad ? 
+            signal * this.iterationPeriod * this.options.energy_integration : 0;
+            
         this.log(
             'e: ' + energy +
             ' | e_of: ' + this.energy_offset +
@@ -270,7 +285,8 @@ export var VAD = function (options) {
             ' | int: ' + integration +
             ' | voiceTrend: ' + this.voiceTrend +
             ' | start: ' + start +
-            ' | end: ' + end
+            ' | end: ' + end +
+            ' | adaptive: ' + this.options.adaptiveVad
         );
 
         return signal;
