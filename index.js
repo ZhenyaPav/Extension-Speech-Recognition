@@ -45,6 +45,17 @@ let audioChunks = [];
 /** @type {MediaRecorder} */
 let mediaRecorder = null;
 
+// VAD Buffering System
+let circularBuffer = [];
+let bufferSize = 1000; // 1 second of pre-roll (in milliseconds)
+let tailTimeout = null;
+let tailDuration = 800; // 800ms tail after speech stops
+let isTailActive = false;
+let vadInstance = null;
+let audioContext = null;
+let mediaStream = null;
+let bufferProcessor = null;
+
 async function moduleWorker() {
     if (sttProviderName != 'Streaming') {
         return;
@@ -129,6 +140,154 @@ async function moduleWorker() {
     }
     finally {
         inApiCall = false;
+    }
+}
+
+// Text post-processing function
+function postProcessText(text) {
+    if (!text || typeof text !== 'string') return text;
+    
+    let processed = text;
+    
+    // Remove square brackets and content within them if enabled
+    if (extension_settings.speech_recognition.removeBrackets !== false) {
+        processed = processed.replace(/\[.*?\]/g, '');
+    }
+    
+    // Clean up extra whitespace
+    processed = processed.replace(/\s+/g, ' ').trim();
+    
+    return processed;
+}
+
+// VAD Buffering Functions
+function startRecordingWithBuffer() {
+    if (audioRecording) return;
+    
+    console.debug(DEBUG_PREFIX + 'Starting recording with pre-roll buffer');
+    
+    // Start MediaRecorder
+    if (!mediaRecorder) {
+        mediaRecorder = new MediaRecorder(mediaStream);
+        
+        mediaRecorder.ondataavailable = function (e) {
+            audioChunks.push(e.data);
+        };
+        
+        mediaRecorder.onstop = async function () {
+            await processRecordedAudio();
+        };
+    }
+    
+    audioChunks = [];
+    mediaRecorder.start();
+    audioRecording = true;
+    activateMicIcon($('#microphone_button'));
+    
+    // Clear any pending tail timeout
+    if (tailTimeout) {
+        clearTimeout(tailTimeout);
+        tailTimeout = null;
+    }
+    isTailActive = false;
+}
+
+function startTailTimeout() {
+    if (tailTimeout) {
+        clearTimeout(tailTimeout);
+    }
+    
+    isTailActive = true;
+    tailTimeout = setTimeout(() => {
+        if (isTailActive && audioRecording) {
+            console.debug(DEBUG_PREFIX + 'Tail timeout reached, stopping recording');
+            stopRecording();
+        }
+    }, tailDuration);
+}
+
+function stopRecording() {
+    if (!audioRecording) return;
+    
+    console.debug(DEBUG_PREFIX + 'Stopping recording');
+    
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+    }
+    
+    audioRecording = false;
+    isTailActive = false;
+    
+    if (tailTimeout) {
+        clearTimeout(tailTimeout);
+        tailTimeout = null;
+    }
+    
+    deactivateMicIcon($('#microphone_button'));
+}
+
+async function processRecordedAudio() {
+    try {
+        console.debug(DEBUG_PREFIX + 'Processing recorded audio:', audioChunks.length, ' chunks');
+        
+        if (audioChunks.length === 0) {
+            console.debug(DEBUG_PREFIX + 'No audio chunks to process');
+            return;
+        }
+        
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm;codecs=opus' });
+        const arrayBuffer = await audioBlob.arrayBuffer();
+        
+        // Use AudioContext to decode our array buffer into an audio buffer
+        const tempAudioContext = new AudioContext();
+        const audioBuffer = await tempAudioContext.decodeAudioData(arrayBuffer);
+        audioChunks = [];
+        
+        const wavBlob = await convertAudioBufferToWavBlob(audioBuffer);
+        const transcript = await sttProvider.processAudio(wavBlob);
+        
+        console.debug(DEBUG_PREFIX + 'received transcript:', transcript);
+        
+        // Apply post-processing
+        const processedTranscript = postProcessText(transcript);
+        
+        if (processedTranscript && processedTranscript.trim().length > 0) {
+            processTranscript(processedTranscript);
+        } else {
+            console.debug(DEBUG_PREFIX + 'Empty transcript after post-processing, ignoring');
+        }
+        
+    } catch (error) {
+        console.error(DEBUG_PREFIX + 'Error processing recorded audio:', error);
+    }
+}
+
+// Update volume indicator
+function updateVolumeIndicator(volumeData) {
+    const volumeBar = $('#speech_volume_bar');
+    const volumeText = $('#speech_volume_text');
+    
+    if (volumeBar.length === 0) return;
+    
+    // Calculate volume percentage (0-100)
+    const maxVolume = 0.01; // Adjust based on testing
+    const volumePercent = Math.min(100, Math.max(0, (volumeData.energy / maxVolume) * 100));
+    
+    // Update bar
+    volumeBar.css('width', volumePercent + '%');
+    
+    // Update color based on state
+    if (volumeData.willTrigger) {
+        volumeBar.css('background-color', '#ff4444'); // Red for trigger
+    } else if (volumeData.currentState) {
+        volumeBar.css('background-color', '#ffaa00'); // Orange for recording
+    } else {
+        volumeBar.css('background-color', '#44ff44'); // Green for idle
+    }
+    
+    // Update text
+    if (volumeText.length > 0) {
+        volumeText.text(`Volume: ${Math.round(volumePercent)}%${volumeData.willTrigger ? ' (TRIGGER)' : volumeData.currentState ? ' (RECORDING)' : ''}`);
     }
 }
 
@@ -223,31 +382,36 @@ function loadNavigatorAudioRecording() {
 
         let onSuccess = function (stream) {
             const isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
-            const audioContext = new AudioContext(!isFirefox ? { sampleRate: 16000 } : null);
+            audioContext = new AudioContext(!isFirefox ? { sampleRate: 16000 } : null);
+            mediaStream = stream;
             const source = audioContext.createMediaStreamSource(stream);
+            
+            // Get VAD sensitivity from settings (default to 0.5 if not set)
+            const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
+            
             const settings = {
                 source: source,
+                sensitivity: sensitivity,
                 voice_start: function () {
                     if (!audioRecording && extension_settings.speech_recognition.voiceActivationEnabled) {
-                        console.debug(DEBUG_PREFIX + 'Voice started');
-                        if (micButton.is(':visible')) {
-                            micButton.trigger('click');
-                        }
+                        console.debug(DEBUG_PREFIX + 'Voice started - beginning buffered recording');
+                        startRecordingWithBuffer();
                     }
                 },
                 voice_stop: function () {
                     if (audioRecording && extension_settings.speech_recognition.voiceActivationEnabled) {
-                        console.debug(DEBUG_PREFIX + 'Voice stopped');
-                        if (micButton.is(':visible')) {
-                            micButton.trigger('click');
-                        }
+                        console.debug(DEBUG_PREFIX + 'Voice stopped - starting tail timeout');
+                        startTailTimeout();
                     }
+                },
+                voice_volume_update: function (volumeData) {
+                    updateVolumeIndicator(volumeData);
                 },
             };
 
             // only create VAD if voice activation is ON
             if (extension_settings.speech_recognition.voiceActivationEnabled) {
-                new VAD(settings);
+                vadInstance = new VAD(settings);
             }
 
             mediaRecorder = new MediaRecorder(stream);
@@ -491,6 +655,27 @@ function loadSettings() {
     $('#speech_recognition_message_mapping_enabled').prop('checked', extension_settings.speech_recognition.messageMappingEnabled);
     $('#speech_recognition_ptt').val(extension_settings.speech_recognition.ptt ? formatPushToTalkKey(extension_settings.speech_recognition.ptt) : '');
     $('#speech_recognition_voice_activation_enabled').prop('checked', extension_settings.speech_recognition.voiceActivationEnabled);
+    
+    // Load VAD sensitivity setting
+    const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
+    $('#speech_recognition_vad_sensitivity').val(sensitivity);
+    $('#speech_recognition_vad_sensitivity_value').text(sensitivity.toFixed(1));
+    
+    // Load buffer size setting
+    const bufferSizeSeconds = extension_settings.speech_recognition.bufferSize || 1.0;
+    $('#speech_recognition_buffer_size').val(bufferSizeSeconds);
+    $('#speech_recognition_buffer_size_value').text(bufferSizeSeconds.toFixed(1) + 's');
+    bufferSize = bufferSizeSeconds * 1000; // Update global variable
+    
+    // Load tail duration setting
+    const tailDurationSeconds = extension_settings.speech_recognition.tailDuration || 0.8;
+    $('#speech_recognition_tail_duration').val(tailDurationSeconds);
+    $('#speech_recognition_tail_duration_value').text(tailDurationSeconds.toFixed(1) + 's');
+    tailDuration = tailDurationSeconds * 1000; // Update global variable
+    
+    // Load post-processing settings
+    const removeBrackets = extension_settings.speech_recognition.removeBrackets !== false; // Default to true
+    $('#speech_recognition_remove_brackets').prop('checked', removeBrackets);
 }
 
 async function onMessageModeChange() {
@@ -559,6 +744,47 @@ function onVoiceActivationEnabledChange() {
         }
     }
 
+    saveSettingsDebounced();
+}
+
+function onVadSensitivityChange() {
+    const sensitivity = parseFloat($('#speech_recognition_vad_sensitivity').val());
+    extension_settings.speech_recognition.vadSensitivity = sensitivity;
+    $('#speech_recognition_vad_sensitivity_value').text(sensitivity.toFixed(1));
+    
+    // Update VAD instance if it exists
+    if (vadInstance && vadInstance.options) {
+        vadInstance.options.sensitivity = sensitivity;
+    }
+    
+    saveSettingsDebounced();
+}
+
+function onBufferSizeChange() {
+    const bufferSizeSeconds = parseFloat($('#speech_recognition_buffer_size').val());
+    extension_settings.speech_recognition.bufferSize = bufferSizeSeconds;
+    $('#speech_recognition_buffer_size_value').text(bufferSizeSeconds.toFixed(1) + 's');
+    
+    // Update global buffer size variable (convert to milliseconds)
+    bufferSize = bufferSizeSeconds * 1000;
+    
+    saveSettingsDebounced();
+}
+
+function onTailDurationChange() {
+    const tailDurationSeconds = parseFloat($('#speech_recognition_tail_duration').val());
+    extension_settings.speech_recognition.tailDuration = tailDurationSeconds;
+    $('#speech_recognition_tail_duration_value').text(tailDurationSeconds.toFixed(1) + 's');
+    
+    // Update global tail duration variable (convert to milliseconds)
+    tailDuration = tailDurationSeconds * 1000;
+    
+    saveSettingsDebounced();
+}
+
+function onRemoveBracketsChange() {
+    const enabled = !!$('#speech_recognition_remove_brackets').prop('checked');
+    extension_settings.speech_recognition.removeBrackets = enabled;
     saveSettingsDebounced();
 }
 
@@ -836,6 +1062,34 @@ $(document).ready(function () {
                             <small>Enable activation by voice</small>
                         </label>
                     </div>
+                    <div id="speech_recognition_vad_sensitivity_div" title="Adjust VAD sensitivity. Lower values make it more sensitive to voice, higher values make it less sensitive.">
+                        <span>VAD Sensitivity</span> </br>
+                        <input type="range" id="speech_recognition_vad_sensitivity" min="0" max="1" step="0.1" value="0.5" class="text_pole">
+                        <span id="speech_recognition_vad_sensitivity_value">0.5</span>
+                    </div>
+                    <div id="speech_recognition_buffer_size_div" title="Adjust pre-roll buffer size. Amount of audio to capture before speech is detected.">
+                        <span>Pre-roll Buffer (seconds)</span> </br>
+                        <input type="range" id="speech_recognition_buffer_size" min="0" max="2" step="0.1" value="1.0" class="text_pole">
+                        <span id="speech_recognition_buffer_size_value">1.0s</span>
+                    </div>
+                    <div id="speech_recognition_tail_duration_div" title="Adjust tail duration. Amount of audio to capture after speech stops.">
+                        <span>Tail Duration (seconds)</span> </br>
+                        <input type="range" id="speech_recognition_tail_duration" min="0" max="2" step="0.1" value="0.8" class="text_pole">
+                        <span id="speech_recognition_tail_duration_value">0.8s</span>
+                    </div>
+                    <div id="speech_recognition_volume_indicator_div" title="Shows current audio volume level and VAD trigger status.">
+                        <span>Volume Indicator</span> </br>
+                        <div style="width: 100%; height: 20px; background-color: #333; border-radius: 10px; overflow: hidden;">
+                            <div id="speech_volume_bar" style="height: 100%; width: 0%; background-color: #44ff44; transition: width 0.1s, background-color 0.1s;"></div>
+                        </div>
+                        <span id="speech_volume_text">Volume: 0%</span>
+                    </div>
+                    <div id="speech_recognition_post_processing_div" title="Configure text post-processing options.">
+                        <label class="checkbox_label" for="speech_recognition_remove_brackets">
+                            <input type="checkbox" id="speech_recognition_remove_brackets" name="speech_recognition_remove_brackets" checked>
+                            <small>Remove square brackets and content [like this]</small>
+                        </label>
+                    </div>
                     <div id="speech_recognition_message_mode_div">
                         <span>Message Mode</span> </br>
                         <select id="speech_recognition_message_mode">
@@ -872,6 +1126,10 @@ $(document).ready(function () {
         $('#speech_recognition_language').on('change', onSttLanguageChange);
         $('#speech_recognition_message_mapping_enabled').on('click', onMessageMappingEnabledClick);
         $('#speech_recognition_voice_activation_enabled').on('change', onVoiceActivationEnabledChange);
+        $('#speech_recognition_vad_sensitivity').on('input', onVadSensitivityChange);
+        $('#speech_recognition_buffer_size').on('input', onBufferSizeChange);
+        $('#speech_recognition_tail_duration').on('input', onTailDurationChange);
+        $('#speech_recognition_remove_brackets').on('change', onRemoveBracketsChange);
         $('#speech_recognition_ptt').on('focus', function () {
             if (this instanceof HTMLInputElement) {
                 this.value = 'Enter a key combo. "Escape" to clear';

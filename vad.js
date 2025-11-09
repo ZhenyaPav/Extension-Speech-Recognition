@@ -35,11 +35,13 @@ export var VAD = function (options) {
         bufferLen: 512,
         voice_stop: function () { },
         voice_start: function () { },
+        voice_volume_update: function () { }, // New callback for volume updates
         smoothingTimeConstant: 0.99,
         energy_offset: 1e-8, // The initial offset.
         energy_threshold_ratio_pos: 2, // Signal must be twice the offset
         energy_threshold_ratio_neg: 0.5, // Signal must be half the offset
         energy_integration: 1, // Size of integration change compared to the signal per second.
+        sensitivity: 0.5, // New sensitivity setting (0-1, where 0.5 is default)
         filter: [
             { f: 200, v: 0 }, // 0 -> 200 is 0
             { f: 2000, v: 1 } // 200 -> 2k is 1
@@ -186,9 +188,14 @@ export var VAD = function (options) {
         var energy = this.getEnergy();
         var signal = energy - this.energy_offset;
 
-        if (signal > this.energy_threshold_pos) {
+        // Apply sensitivity adjustment (0.0 = most sensitive, 1.0 = least sensitive)
+        var sensitivityMultiplier = 1.0 + (this.options.sensitivity * 2.0); // Range: 1.0 to 3.0
+        var adjusted_threshold_pos = this.energy_threshold_pos * sensitivityMultiplier;
+        var adjusted_threshold_neg = this.energy_threshold_neg * sensitivityMultiplier;
+
+        if (signal > adjusted_threshold_pos) {
             this.voiceTrend = (this.voiceTrend + 1 > this.voiceTrendMax) ? this.voiceTrendMax : this.voiceTrend + 1;
-        } else if (signal < -this.energy_threshold_neg) {
+        } else if (signal < -adjusted_threshold_neg) {
             this.voiceTrend = (this.voiceTrend - 1 < this.voiceTrendMin) ? this.voiceTrendMin : this.voiceTrend - 1;
         } else {
             // voiceTrend gets smaller
@@ -222,6 +229,17 @@ export var VAD = function (options) {
         this.energy_offset = this.energy_offset < 0 ? 0 : this.energy_offset;
         this.energy_threshold_pos = this.energy_offset * this.options.energy_threshold_ratio_pos;
         this.energy_threshold_neg = this.energy_offset * this.options.energy_threshold_ratio_neg;
+
+        // Broadcast volume update
+        if (this.options.voice_volume_update) {
+            this.options.voice_volume_update({
+                energy: energy,
+                signal: signal,
+                threshold: adjusted_threshold_pos,
+                willTrigger: start && !this.vadState,
+                currentState: this.vadState
+            });
+        }
 
         // Broadcast the messages
         if (start && !this.vadState) {
