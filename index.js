@@ -175,7 +175,7 @@ function startContinuousBuffering() {
     
     // Create a separate MediaRecorder for continuous buffering
     if (!bufferProcessor) {
-        bufferProcessor = new MediaRecorder(mediaStream, { mimeType: 'audio/webm;codecs=opus' });
+        bufferProcessor = new MediaRecorder(mediaStream, { mimeType: 'audio/webm;codecs=pcm' });
         
         bufferProcessor.ondataavailable = function (e) {
             if (e.data.size > 0) {
@@ -219,7 +219,7 @@ function startRecordingWithBuffer() {
     
     // Start MediaRecorder for actual recording
     if (!mediaRecorder) {
-        mediaRecorder = new MediaRecorder(mediaStream);
+        mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'audio/webm;codecs=pcm' });
         
         mediaRecorder.ondataavailable = function (e) {
             audioChunks.push(e.data);
@@ -297,7 +297,7 @@ async function processRecordedAudio() {
             return;
         }
         
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm;codecs=opus' });
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm;codecs=pcm' });
         const arrayBuffer = await audioBlob.arrayBuffer();
         
         // Use AudioContext to decode our array buffer into an audio buffer
@@ -550,7 +550,7 @@ function loadNavigatorAudioRecording() {
                 startContinuousBuffering();
             }
 
-            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=pcm' });
 
             micButton.off('click').on('click', function () {
                 if (!audioRecording) {
@@ -577,7 +577,7 @@ function loadNavigatorAudioRecording() {
 
             mediaRecorder.onstop = async function () {
                 console.debug(DEBUG_PREFIX + 'data available after MediaRecorder.stop() called: ', audioChunks.length, ' chunks');
-                const audioBlob = new Blob(audioChunks, { type: 'audio/webm;codecs=opus' });
+                const audioBlob = new Blob(audioChunks, { type: 'audio/webm;codecs=pcm' });
                 const arrayBuffer = await audioBlob.arrayBuffer();
 
                 // Use AudioContext to decode our array buffer into an audio buffer
