@@ -306,21 +306,75 @@ async function processRecordedAudio() {
         
         console.debug(DEBUG_PREFIX + `Using ${validChunks.length} valid chunks out of ${audioChunks.length} total`);
         
-        const audioBlob = new Blob(validChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-        const arrayBuffer = await audioBlob.arrayBuffer();
+        // Try to create blob with explicit MIME type and validate chunks more thoroughly
+        let audioBlob;
+        try {
+            // Filter out any chunks that might be corrupted
+            const cleanChunks = validChunks.filter(chunk => {
+                return chunk && chunk.size > 0 && chunk.type !== '';
+            });
+            
+            if (cleanChunks.length === 0) {
+                console.debug(DEBUG_PREFIX + 'No clean chunks available for blob creation in processRecordedAudio');
+                return;
+            }
+            
+            // Try with audio/webm; if that fails, try audio/ogg as fallback
+            const mimeType = mediaRecorder.mimeType || 'audio/webm';
+            audioBlob = new Blob(cleanChunks, { type: mimeType });
+            
+            console.debug(DEBUG_PREFIX + `Created blob in processRecordedAudio with ${cleanChunks.length} chunks, MIME type: ${mimeType}`);
+        } catch (blobError) {
+            console.error(DEBUG_PREFIX + 'Error creating audio blob in processRecordedAudio:', blobError);
+            return;
+        }
+        
+        // Validate blob before creating array buffer
+        if (audioBlob.size === 0) {
+            console.debug(DEBUG_PREFIX + 'Empty audio blob in processRecordedAudio, cannot process audio');
+            return;
+        }
+        
+        let arrayBuffer;
+        try {
+            arrayBuffer = await audioBlob.arrayBuffer();
+        } catch (arrayBufferError) {
+            console.error(DEBUG_PREFIX + 'Error creating array buffer from blob in processRecordedAudio:', arrayBufferError);
+            return;
+        }
         
         // Validate array buffer
         if (arrayBuffer.byteLength === 0) {
-            console.debug(DEBUG_PREFIX + 'Empty array buffer, cannot process audio');
+            console.debug(DEBUG_PREFIX + 'Empty array buffer in processRecordedAudio, cannot process audio');
+            console.debug(DEBUG_PREFIX + 'Blob info in processRecordedAudio:', {
+                blobSize: audioBlob.size,
+                mimeType: audioBlob.type,
+                chunkCount: validChunks.length,
+                chunkSizes: validChunks.map(chunk => chunk.size),
+                cleanChunkCount: validChunks.filter(chunk => chunk && chunk.size > 0 && chunk.type !== '').length
+            });
             return;
         }
         
         console.debug(DEBUG_PREFIX + `Audio blob size: ${audioBlob.size}, array buffer size: ${arrayBuffer.byteLength}, MIME type: ${audioBlob.type}`);
         
         // Use AudioContext to decode our array buffer into an audio buffer
-        const tempAudioContext = new AudioContext();
-        const audioBuffer = await tempAudioContext.decodeAudioData(arrayBuffer);
-        audioChunks = [];
+        let audioBuffer;
+        try {
+            const tempAudioContext = new AudioContext();
+            audioBuffer = await tempAudioContext.decodeAudioData(arrayBuffer);
+            audioChunks = [];
+        } catch (decodeError) {
+            console.error(DEBUG_PREFIX + 'Error decoding audio data in processRecordedAudio:', decodeError);
+            console.error(DEBUG_PREFIX + 'Audio info in processRecordedAudio:', {
+                blobSize: audioBlob.size,
+                arrayBufferSize: arrayBuffer.byteLength,
+                mimeType: audioBlob.type,
+                chunkCount: validChunks.length,
+                chunkSizes: validChunks.map(chunk => chunk.size)
+            });
+            return;
+        }
         
         const wavBlob = await convertAudioBufferToWavBlob(audioBuffer);
         const transcript = await sttProvider.processAudio(wavBlob);
@@ -609,12 +663,53 @@ function loadNavigatorAudioRecording() {
                 
                 console.debug(DEBUG_PREFIX + `Using ${validChunks.length} valid chunks out of ${audioChunks.length} total in onstop`);
                 
-                const audioBlob = new Blob(validChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-                const arrayBuffer = await audioBlob.arrayBuffer();
+                // Try to create blob with explicit MIME type and validate chunks more thoroughly
+                let audioBlob;
+                try {
+                    // Filter out any chunks that might be corrupted
+                    const cleanChunks = validChunks.filter(chunk => {
+                        return chunk && chunk.size > 0 && chunk.type !== '';
+                    });
+                    
+                    if (cleanChunks.length === 0) {
+                        console.debug(DEBUG_PREFIX + 'No clean chunks available for blob creation');
+                        return;
+                    }
+                    
+                    // Try with audio/webm; if that fails, try audio/ogg as fallback
+                    const mimeType = mediaRecorder.mimeType || 'audio/webm';
+                    audioBlob = new Blob(cleanChunks, { type: mimeType });
+                    
+                    console.debug(DEBUG_PREFIX + `Created blob with ${cleanChunks.length} chunks, MIME type: ${mimeType}`);
+                } catch (blobError) {
+                    console.error(DEBUG_PREFIX + 'Error creating audio blob:', blobError);
+                    return;
+                }
+                
+                // Validate blob before creating array buffer
+                if (audioBlob.size === 0) {
+                    console.debug(DEBUG_PREFIX + 'Empty audio blob in onstop handler, cannot process audio');
+                    return;
+                }
+                
+                let arrayBuffer;
+                try {
+                    arrayBuffer = await audioBlob.arrayBuffer();
+                } catch (arrayBufferError) {
+                    console.error(DEBUG_PREFIX + 'Error creating array buffer from blob:', arrayBufferError);
+                    return;
+                }
 
                 // Validate array buffer
                 if (arrayBuffer.byteLength === 0) {
                     console.debug(DEBUG_PREFIX + 'Empty array buffer in onstop handler, cannot process audio');
+                    console.debug(DEBUG_PREFIX + 'Blob info:', {
+                        blobSize: audioBlob.size,
+                        mimeType: audioBlob.type,
+                        chunkCount: validChunks.length,
+                        chunkSizes: validChunks.map(chunk => chunk.size),
+                        cleanChunkCount: validChunks.filter(chunk => chunk && chunk.size > 0 && chunk.type !== '').length
+                    });
                     return;
                 }
                 
@@ -632,7 +727,8 @@ function loadNavigatorAudioRecording() {
                         blobSize: audioBlob.size,
                         arrayBufferSize: arrayBuffer.byteLength,
                         mimeType: audioBlob.type,
-                        chunkCount: validChunks.length
+                        chunkCount: validChunks.length,
+                        chunkSizes: validChunks.map(chunk => chunk.size)
                     });
                     return;
                 }
