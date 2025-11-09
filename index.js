@@ -286,10 +286,13 @@ function updateVolumeIndicator(volumeData) {
         thresholdForDisplay = volumeData.threshold;
     } else {
         // Calculate static threshold when adaptive mode is off
-        const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
-        const sensitivityMultiplier = 5.0 - (sensitivity * 4.5); // Range: 5.0 to 0.5 (much more range)
-        const baseThreshold = 1e-8 * 2; // energy_offset * energy_threshold_ratio_pos
-        thresholdForDisplay = baseThreshold * sensitivityMultiplier;
+        // Map threshold (0.0 to 1.0) to energy range
+        const threshold = extension_settings.speech_recognition.vadSensitivity || 0.5;
+        // Map 0.0-1.0 to energy range: 1e-6 (high sensitivity) to 1e-4 (low sensitivity)
+        // This gives us the full range from very sensitive to barely sensitive
+        const minEnergy = 1e-6;
+        const maxEnergy = 1e-4;
+        thresholdForDisplay = minEnergy + (threshold * (maxEnergy - minEnergy));
     }
     
     const logThreshold = Math.log10(Math.max(1e-10, thresholdForDisplay));
@@ -447,10 +450,21 @@ function loadNavigatorAudioRecording() {
             const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
             const adaptiveVad = extension_settings.speech_recognition.adaptiveVad !== false; // Default to true
             
+            // Calculate threshold for non-adaptive mode
+            let threshold;
+            if (!adaptiveVad) {
+                // Map threshold (0.0 to 1.0) to energy range
+                // Map 0.0-1.0 to energy range: 1e-6 (high sensitivity) to 1e-4 (low sensitivity)
+                const minEnergy = 1e-6;
+                const maxEnergy = 1e-4;
+                threshold = minEnergy + (sensitivity * (maxEnergy - minEnergy));
+            }
+            
             const settings = {
                 source: source,
                 sensitivity: sensitivity,
                 adaptiveVad: adaptiveVad,
+                threshold: threshold,
                 voice_start: function () {
                     if (!audioRecording && extension_settings.speech_recognition.voiceActivationEnabled) {
                         console.debug(DEBUG_PREFIX + 'Voice started - beginning buffered recording');
@@ -751,6 +765,13 @@ function loadSettings() {
             .join('\n');
         $('#speech_recognition_text_replacements').val(replacementLines);
     }
+    
+    // Load adaptive VAD setting and initialize UI state
+    const adaptiveVad = extension_settings.speech_recognition.adaptiveVad !== false; // Default to true
+    $('#speech_recognition_adaptive_vad').prop('checked', adaptiveVad);
+    
+    // Show/hide sensitivity slider based on adaptive VAD setting
+    $('#speech_recognition_vad_sensitivity_div').toggle(!adaptiveVad);
 }
 
 async function onMessageModeChange() {
@@ -831,6 +852,9 @@ function onAdaptiveVadChange() {
         vadInstance.options.adaptiveVad = enabled;
     }
     
+    // Show/hide sensitivity slider based on adaptive VAD setting
+    $('#speech_recognition_vad_sensitivity_div').toggle(!enabled);
+    
     saveSettingsDebounced();
 }
 
@@ -842,6 +866,14 @@ function onVadSensitivityChange() {
     // Update VAD instance if it exists
     if (vadInstance && vadInstance.options) {
         vadInstance.options.sensitivity = sensitivity;
+        
+        // Update threshold for non-adaptive mode
+        if (!vadInstance.options.adaptiveVad) {
+            const minEnergy = 1e-6;
+            const maxEnergy = 1e-4;
+            const threshold = minEnergy + (sensitivity * (maxEnergy - minEnergy));
+            vadInstance.options.threshold = threshold;
+        }
     }
     
     saveSettingsDebounced();
@@ -1195,8 +1227,8 @@ $(document).ready(function () {
                             <small>Enable adaptive VAD</small>
                         </label>
                     </div>
-                    <div id="speech_recognition_vad_sensitivity_div" title="Adjust VAD sensitivity. Lower values make it more sensitive to voice, higher values make it less sensitive.">
-                        <span>VAD Sensitivity</span> </br>
+                    <div id="speech_recognition_vad_sensitivity_div" title="Adjust recording activation threshold. Lower values make it more sensitive to voice, higher values make it less sensitive.">
+                        <span>Recording Activation Threshold</span> </br>
                         <input type="range" id="speech_recognition_vad_sensitivity" min="0" max="1" step="0.1" value="0.5" class="text_pole">
                         <span id="speech_recognition_vad_sensitivity_value">0.5</span>
                     </div>
