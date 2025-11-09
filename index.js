@@ -45,18 +45,10 @@ let audioChunks = [];
 /** @type {MediaRecorder} */
 let mediaRecorder = null;
 
-// VAD Buffering System
-let circularBuffer = [];
-let bufferSize = 1000; // 1 second of pre-roll (in milliseconds)
-let tailTimeout = null;
-let tailDuration = 800; // 800ms tail after speech stops
-let isTailActive = false;
+// VAD System
 let vadInstance = null;
 let audioContext = null;
 let mediaStream = null;
-let bufferProcessor = null;
-let isBuffering = false;
-let bufferStartTime = 0;
 
 async function moduleWorker() {
     if (sttProviderName != 'Streaming') {
@@ -167,105 +159,16 @@ function postProcessText(text) {
     return processed;
 }
 
-// VAD Buffering Functions
-function startContinuousBuffering() {
-    if (isBuffering) return;
-    
-    console.debug(DEBUG_PREFIX + 'Starting continuous buffering for pre-roll');
-    
-    // Create a separate MediaRecorder for continuous buffering
-    if (!bufferProcessor) {
-        bufferProcessor = new MediaRecorder(mediaStream);
-        
-        bufferProcessor.ondataavailable = function (e) {
-            if (e.data.size > 0) {
-                circularBuffer.push({
-                    data: e.data,
-                    timestamp: Date.now()
-                });
-                
-                // Keep only the last bufferSize milliseconds of data
-                const cutoffTime = Date.now() - bufferSize;
-                circularBuffer = circularBuffer.filter(chunk => chunk.timestamp > cutoffTime);
-            }
-        };
-        
-        // Request data frequently to get small chunks
-        bufferProcessor.start(100); // Get data every 100ms
-    }
-    
-    isBuffering = true;
-    bufferStartTime = Date.now();
-}
-
-function stopContinuousBuffering() {
-    if (!isBuffering) return;
-    
-    console.debug(DEBUG_PREFIX + 'Stopping continuous buffering');
-    
-    if (bufferProcessor && bufferProcessor.state === 'recording') {
-        bufferProcessor.stop();
-        bufferProcessor = null;
-    }
-    
-    isBuffering = false;
-    circularBuffer = [];
-}
-
-function startRecordingWithBuffer() {
+// VAD Functions
+function startRecording() {
     if (audioRecording) return;
     
-    console.debug(DEBUG_PREFIX + 'Starting recording with pre-roll buffer');
-    
-    // Start MediaRecorder for actual recording
-    if (!mediaRecorder) {
-        mediaRecorder = new MediaRecorder(mediaStream);
-        
-        mediaRecorder.ondataavailable = function (e) {
-            audioChunks.push(e.data);
-        };
-        
-        mediaRecorder.onstop = async function () {
-            await processRecordedAudio();
-        };
-    }
+    console.debug(DEBUG_PREFIX + 'Starting recording');
     
     audioChunks = [];
-    
-    // Add pre-roll buffer chunks first if available
-    if (circularBuffer.length > 0) {
-        console.debug(DEBUG_PREFIX + `Adding ${circularBuffer.length} pre-roll chunks`);
-        // Sort by timestamp and add to recording
-        circularBuffer.sort((a, b) => a.timestamp - b.timestamp);
-        circularBuffer.forEach(chunk => {
-            audioChunks.push(chunk.data);
-        });
-    }
-    
     mediaRecorder.start();
     audioRecording = true;
     activateMicIcon($('#microphone_button'));
-    
-    // Clear any pending tail timeout
-    if (tailTimeout) {
-        clearTimeout(tailTimeout);
-        tailTimeout = null;
-    }
-    isTailActive = false;
-}
-
-function startTailTimeout() {
-    if (tailTimeout) {
-        clearTimeout(tailTimeout);
-    }
-    
-    isTailActive = true;
-    tailTimeout = setTimeout(() => {
-        if (isTailActive && audioRecording) {
-            console.debug(DEBUG_PREFIX + 'Tail timeout reached, stopping recording');
-            stopRecording();
-        }
-    }, tailDuration);
 }
 
 function stopRecording() {
@@ -278,127 +181,9 @@ function stopRecording() {
     }
     
     audioRecording = false;
-    isTailActive = false;
-    
-    if (tailTimeout) {
-        clearTimeout(tailTimeout);
-        tailTimeout = null;
-    }
-    
     deactivateMicIcon($('#microphone_button'));
 }
 
-async function processRecordedAudio() {
-    try {
-        console.debug(DEBUG_PREFIX + 'Processing recorded audio:', audioChunks.length, ' chunks');
-        
-        if (audioChunks.length === 0) {
-            console.debug(DEBUG_PREFIX + 'No audio chunks to process');
-            return;
-        }
-        
-        // Validate chunks before processing
-        const validChunks = audioChunks.filter(chunk => chunk && chunk.size > 0);
-        if (validChunks.length === 0) {
-            console.debug(DEBUG_PREFIX + 'No valid audio chunks to process');
-            return;
-        }
-        
-        console.debug(DEBUG_PREFIX + `Using ${validChunks.length} valid chunks out of ${audioChunks.length} total`);
-        
-        // Try to create blob with explicit MIME type and validate chunks more thoroughly
-        let audioBlob;
-        try {
-            // Filter out any chunks that might be corrupted
-            const cleanChunks = validChunks.filter(chunk => {
-                return chunk && chunk.size > 0 && chunk.type !== '';
-            });
-            
-            if (cleanChunks.length === 0) {
-                console.debug(DEBUG_PREFIX + 'No clean chunks available for blob creation in processRecordedAudio');
-                return;
-            }
-            
-            // Try with audio/webm; if that fails, try audio/ogg as fallback
-            const mimeType = mediaRecorder.mimeType || 'audio/webm';
-            audioBlob = new Blob(cleanChunks, { type: mimeType });
-            
-            console.debug(DEBUG_PREFIX + `Created blob in processRecordedAudio with ${cleanChunks.length} chunks, MIME type: ${mimeType}`);
-        } catch (blobError) {
-            console.error(DEBUG_PREFIX + 'Error creating audio blob in processRecordedAudio:', blobError);
-            return;
-        }
-        
-        // Validate blob before creating array buffer
-        if (audioBlob.size === 0) {
-            console.debug(DEBUG_PREFIX + 'Empty audio blob in processRecordedAudio, cannot process audio');
-            return;
-        }
-        
-        let arrayBuffer;
-        try {
-            arrayBuffer = await audioBlob.arrayBuffer();
-        } catch (arrayBufferError) {
-            console.error(DEBUG_PREFIX + 'Error creating array buffer from blob in processRecordedAudio:', arrayBufferError);
-            return;
-        }
-        
-        // Validate array buffer
-        if (arrayBuffer.byteLength === 0) {
-            console.debug(DEBUG_PREFIX + 'Empty array buffer in processRecordedAudio, cannot process audio');
-            console.debug(DEBUG_PREFIX + 'Blob info in processRecordedAudio:', {
-                blobSize: audioBlob.size,
-                mimeType: audioBlob.type,
-                chunkCount: validChunks.length,
-                chunkSizes: validChunks.map(chunk => chunk.size),
-                cleanChunkCount: validChunks.filter(chunk => chunk && chunk.size > 0 && chunk.type !== '').length
-            });
-            return;
-        }
-        
-        console.debug(DEBUG_PREFIX + `Audio blob size: ${audioBlob.size}, array buffer size: ${arrayBuffer.byteLength}, MIME type: ${audioBlob.type}`);
-        
-        // Use AudioContext to decode our array buffer into an audio buffer
-        let audioBuffer;
-        try {
-            const tempAudioContext = new AudioContext();
-            audioBuffer = await tempAudioContext.decodeAudioData(arrayBuffer);
-            audioChunks = [];
-        } catch (decodeError) {
-            console.error(DEBUG_PREFIX + 'Error decoding audio data in processRecordedAudio:', decodeError);
-            console.error(DEBUG_PREFIX + 'Audio info in processRecordedAudio:', {
-                blobSize: audioBlob.size,
-                arrayBufferSize: arrayBuffer.byteLength,
-                mimeType: audioBlob.type,
-                chunkCount: validChunks.length,
-                chunkSizes: validChunks.map(chunk => chunk.size)
-            });
-            return;
-        }
-        
-        const wavBlob = await convertAudioBufferToWavBlob(audioBuffer);
-        const transcript = await sttProvider.processAudio(wavBlob);
-        
-        console.debug(DEBUG_PREFIX + 'received transcript:', transcript);
-        
-        // Apply post-processing
-        const processedTranscript = postProcessText(transcript);
-        
-        if (processedTranscript && processedTranscript.trim().length > 0) {
-            processTranscript(processedTranscript);
-        } else {
-            console.debug(DEBUG_PREFIX + 'Empty transcript after post-processing, ignoring');
-        }
-        
-    } catch (error) {
-        console.error(DEBUG_PREFIX + 'Error processing recorded audio:', error);
-        console.error(DEBUG_PREFIX + 'Audio chunks info:', {
-            totalChunks: audioChunks.length,
-            chunkSizes: audioChunks.map(chunk => chunk ? chunk.size : 0),
-            mimeType: mediaRecorder?.mimeType
-        });
-    }
-}
 
 // Update volume indicator
 function updateVolumeIndicator(volumeData) {
@@ -604,14 +389,14 @@ function loadNavigatorAudioRecording() {
                 threshold: threshold,
                 voice_start: function () {
                     if (!audioRecording && extension_settings.speech_recognition.voiceActivationEnabled) {
-                        console.debug(DEBUG_PREFIX + 'Voice started - beginning buffered recording');
-                        startRecordingWithBuffer();
+                        console.debug(DEBUG_PREFIX + 'Voice started - beginning recording');
+                        startRecording();
                     }
                 },
                 voice_stop: function () {
                     if (audioRecording && extension_settings.speech_recognition.voiceActivationEnabled) {
-                        console.debug(DEBUG_PREFIX + 'Voice stopped - starting tail timeout');
-                        startTailTimeout();
+                        console.debug(DEBUG_PREFIX + 'Voice stopped - stopping recording');
+                        stopRecording();
                     }
                 },
                 voice_volume_update: function (volumeData) {
@@ -622,8 +407,6 @@ function loadNavigatorAudioRecording() {
             // only create VAD if voice activation is ON
             if (extension_settings.speech_recognition.voiceActivationEnabled) {
                 vadInstance = new VAD(settings);
-                // Start continuous buffering for pre-roll
-                startContinuousBuffering();
             }
 
             mediaRecorder = new MediaRecorder(stream);
@@ -867,9 +650,6 @@ function deactivateMicIcon(micButton) {
 function stopCurrentProvider() {
     console.debug(DEBUG_PREFIX + 'stop current provider');
     
-    // Stop continuous buffering
-    stopContinuousBuffering();
-    
     // Stop VAD instance
     if (vadInstance) {
         vadInstance = null;
@@ -962,17 +742,6 @@ function loadSettings() {
     $('#speech_recognition_vad_sensitivity').val(sensitivity);
     $('#speech_recognition_vad_sensitivity_value').text(sensitivity.toFixed(2));
     
-    // Load buffer size setting
-    const bufferSizeSeconds = extension_settings.speech_recognition.bufferSize || 1.0;
-    $('#speech_recognition_buffer_size').val(bufferSizeSeconds);
-    $('#speech_recognition_buffer_size_value').text(bufferSizeSeconds.toFixed(1) + 's');
-    bufferSize = bufferSizeSeconds * 1000; // Update global variable
-    
-    // Load tail duration setting
-    const tailDurationSeconds = extension_settings.speech_recognition.tailDuration || 0.8;
-    $('#speech_recognition_tail_duration').val(tailDurationSeconds);
-    $('#speech_recognition_tail_duration_value').text(tailDurationSeconds.toFixed(1) + 's');
-    tailDuration = tailDurationSeconds * 1000; // Update global variable
     
     // Load post-processing settings
     const removeBrackets = extension_settings.speech_recognition.removeBrackets !== false; // Default to true
@@ -1044,9 +813,6 @@ function onVoiceActivationEnabledChange() {
         micButton.off('click');
         loadNavigatorAudioRecording();
     } else {
-        // Stop continuous buffering when voice activation is disabled
-        stopContinuousBuffering();
-        
         if (!audioRecording) {
             if (mediaRecorder && mediaRecorder.stream) {
                 try {
@@ -1105,14 +871,14 @@ function onAdaptiveVadChange() {
             threshold: threshold,
             voice_start: function () {
                 if (!audioRecording && extension_settings.speech_recognition.voiceActivationEnabled) {
-                    console.debug(DEBUG_PREFIX + 'Voice started - beginning buffered recording');
-                    startRecordingWithBuffer();
+                    console.debug(DEBUG_PREFIX + 'Voice started - beginning recording');
+                    startRecording();
                 }
             },
             voice_stop: function () {
                 if (audioRecording && extension_settings.speech_recognition.voiceActivationEnabled) {
-                    console.debug(DEBUG_PREFIX + 'Voice stopped - starting tail timeout');
-                    startTailTimeout();
+                    console.debug(DEBUG_PREFIX + 'Voice stopped - stopping recording');
+                    stopRecording();
                 }
             },
             voice_volume_update: function (volumeData) {
@@ -1151,27 +917,6 @@ function onVadSensitivityChange() {
     saveSettingsDebounced();
 }
 
-function onBufferSizeChange() {
-    const bufferSizeSeconds = parseFloat($('#speech_recognition_buffer_size').val());
-    extension_settings.speech_recognition.bufferSize = bufferSizeSeconds;
-    $('#speech_recognition_buffer_size_value').text(bufferSizeSeconds.toFixed(1) + 's');
-    
-    // Update global buffer size variable (convert to milliseconds)
-    bufferSize = bufferSizeSeconds * 1000;
-    
-    saveSettingsDebounced();
-}
-
-function onTailDurationChange() {
-    const tailDurationSeconds = parseFloat($('#speech_recognition_tail_duration').val());
-    extension_settings.speech_recognition.tailDuration = tailDurationSeconds;
-    $('#speech_recognition_tail_duration_value').text(tailDurationSeconds.toFixed(1) + 's');
-    
-    // Update global tail duration variable (convert to milliseconds)
-    tailDuration = tailDurationSeconds * 1000;
-    
-    saveSettingsDebounced();
-}
 
 function onRemoveBracketsChange() {
     const enabled = !!$('#speech_recognition_remove_brackets').prop('checked');
@@ -1475,16 +1220,6 @@ $(document).ready(function () {
                             <small>Enable activation by voice</small>
                         </label>
                     </div>
-                    <div id="speech_recognition_buffer_size_div" title="Adjust pre-roll buffer size. Amount of audio to capture before speech is detected.">
-                        <span>Pre-roll Buffer (seconds)</span> </br>
-                        <input type="range" id="speech_recognition_buffer_size" min="0" max="2" step="0.1" value="1.0" class="text_pole">
-                        <span id="speech_recognition_buffer_size_value">1.0s</span>
-                    </div>
-                    <div id="speech_recognition_tail_duration_div" title="Adjust tail duration. Amount of audio to capture after speech stops.">
-                        <span>Tail Duration (seconds)</span> </br>
-                        <input type="range" id="speech_recognition_tail_duration" min="0" max="2" step="0.1" value="0.8" class="text_pole">
-                        <span id="speech_recognition_tail_duration_value">0.8s</span>
-                    </div>
                     <div id="speech_recognition_volume_indicator_div" title="Shows current audio volume level and VAD trigger status.">
                         <span>Volume Indicator</span> </br>
                         <div style="width: 100%; height: 20px; background-color: #333; border-radius: 10px; overflow: hidden; position: relative;">
@@ -1547,8 +1282,6 @@ $(document).ready(function () {
         $('#speech_recognition_voice_activation_enabled').on('change', onVoiceActivationEnabledChange);
         $('#speech_recognition_adaptive_vad').on('change', onAdaptiveVadChange);
         $('#speech_recognition_vad_sensitivity').on('input', onVadSensitivityChange);
-        $('#speech_recognition_buffer_size').on('input', onBufferSizeChange);
-        $('#speech_recognition_tail_duration').on('input', onTailDurationChange);
         $('#speech_recognition_remove_brackets').on('change', onRemoveBracketsChange);
         $('#speech_recognition_text_replacements').on('change', onTextReplacementsChange);
         $('#speech_recognition_ptt').on('focus', function () {
