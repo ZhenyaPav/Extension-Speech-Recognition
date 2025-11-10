@@ -528,6 +528,19 @@ function loadNavigatorAudioRecording() {
                     return;
                 }
 
+                // Check recording duration using AudioBuffer.duration
+                const recordingDurationMs = audioBuffer.duration * 1000; // Convert to milliseconds
+                const minDurationMs = extension_settings.speech_recognition.minRecordingDuration || 500;
+                
+                // Debug logging for recording duration
+                console.debug(DEBUG_PREFIX + `Recording duration: ${recordingDurationMs.toFixed(0)}ms, minimum required: ${minDurationMs}ms`);
+                
+                // Validate minimum duration
+                if (recordingDurationMs < minDurationMs) {
+                    console.debug(DEBUG_PREFIX + `Recording too short: ${recordingDurationMs.toFixed(0)}ms < ${minDurationMs}ms, skipping transcription`);
+                    return;
+                }
+
                 const wavBlob = await convertAudioBufferToWavBlob(audioBuffer);
                 const transcript = await sttProvider.processAudio(wavBlob);
 
@@ -719,6 +732,7 @@ const defaultSettings = {
      * @type {KeyCombo} Push-to-talk key combo
      */
     ptt: null,
+    minRecordingDuration: 500, // Minimum recording duration in milliseconds (default: 500ms)
 };
 
 function loadSettings() {
@@ -770,6 +784,11 @@ function loadSettings() {
     // Load adaptive VAD setting and initialize UI state
     const adaptiveVad = extension_settings.speech_recognition.adaptiveVad !== false; // Default to true
     $('#speech_recognition_adaptive_vad').prop('checked', adaptiveVad);
+    
+    // Load minimum recording duration setting
+    const minDuration = extension_settings.speech_recognition.minRecordingDuration !== undefined ? extension_settings.speech_recognition.minRecordingDuration : 500;
+    $('#speech_recognition_min_duration').val(minDuration);
+    $('#speech_recognition_min_duration_value').text(minDuration + 'ms');
     
     // Always show sensitivity slider since it affects both adaptive and non-adaptive modes
     $('#speech_recognition_vad_sensitivity_div').show();
@@ -926,6 +945,13 @@ function onVadSensitivityChange() {
         }
     }
     
+    saveSettingsDebounced();
+}
+
+function onMinRecordingDurationChange() {
+    const duration = parseInt($('#speech_recognition_min_duration').val());
+    extension_settings.speech_recognition.minRecordingDuration = duration;
+    $('#speech_recognition_min_duration_value').text(duration + 'ms');
     saveSettingsDebounced();
 }
 
@@ -1251,6 +1277,11 @@ $(document).ready(function () {
                         <input type="range" id="speech_recognition_vad_sensitivity" min="0" max="1" step="0.01" value="0.5" class="text_pole">
                         <span id="speech_recognition_vad_sensitivity_value">0.50</span>
                     </div>
+                    <div id="speech_recognition_min_duration_div" title="Set minimum recording duration to avoid processing very short recordings. Recordings shorter than this will be ignored.">
+                        <span>Minimum Recording Duration</span> </br>
+                        <input type="range" id="speech_recognition_min_duration" min="100" max="5000" step="100" value="500" class="text_pole">
+                        <span id="speech_recognition_min_duration_value">500ms</span>
+                    </div>
                     <div id="speech_recognition_post_processing_div" title="Configure text post-processing options.">
                         <span>Text Replacements</span>
                         <textarea id="speech_recognition_text_replacements" class="text_pole textarea_compact" type="text" rows="3" placeholder="Enter text replacements, one per line:\nfind text = replace with\nNoah = Nova\n[remove this] = "></textarea>
@@ -1294,6 +1325,7 @@ $(document).ready(function () {
         $('#speech_recognition_voice_activation_enabled').on('change', onVoiceActivationEnabledChange);
         $('#speech_recognition_adaptive_vad').on('change', onAdaptiveVadChange);
         $('#speech_recognition_vad_sensitivity').on('input', onVadSensitivityChange);
+        $('#speech_recognition_min_duration').on('input', onMinRecordingDurationChange);
         $('#speech_recognition_remove_brackets').on('change', onRemoveBracketsChange);
         $('#speech_recognition_text_replacements').on('change', onTextReplacementsChange);
         $('#speech_recognition_ptt').on('focus', function () {
