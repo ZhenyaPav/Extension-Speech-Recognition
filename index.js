@@ -122,7 +122,15 @@ async function moduleWorker() {
                 }
                 userMessageFormatted = userMessageFormatted.substring(messageStart);
                 userMessageFormatted = userMessageFormatted.charAt(0).toUpperCase() + userMessageFormatted.substring(1);
-                processTranscript(userMessageFormatted);
+                
+                // Apply post-processing to the streaming transcript
+                userMessageFormatted = postProcessText(userMessageFormatted);
+                
+                if (userMessageFormatted && userMessageFormatted.trim().length > 0) {
+                    processTranscript(userMessageFormatted);
+                } else {
+                    console.debug(DEBUG_PREFIX + 'Empty streaming transcript after post-processing, ignoring');
+                }
             }
         }
         else {
@@ -277,6 +285,9 @@ async function processTranscript(transcript) {
         const transcriptOriginal = transcript;
         let transcriptFormatted = transcriptOriginal.trim();
 
+        // Apply post-processing to the transcript
+        transcriptFormatted = postProcessText(transcriptFormatted);
+
         if (transcriptFormatted.length > 0) {
             console.debug(DEBUG_PREFIX + 'recorded transcript: "' + transcriptFormatted + '"');
             const messageMode = extension_settings.speech_recognition.messageMode;
@@ -336,7 +347,7 @@ async function processTranscript(transcript) {
             }
         }
         else {
-            console.debug(DEBUG_PREFIX + 'Empty transcript, do nothing');
+            console.debug(DEBUG_PREFIX + 'Empty transcript after post-processing, do nothing');
         }
     }
     catch (error) {
