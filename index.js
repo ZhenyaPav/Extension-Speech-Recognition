@@ -288,7 +288,7 @@ async function processTranscript(transcript) {
         // Apply post-processing to the transcript
         transcriptFormatted = postProcessText(transcriptFormatted);
 
-        if (transcriptFormatted.length > 0) {
+        if (transcriptFormatted.trim().length > 0) {
             console.debug(DEBUG_PREFIX + 'recorded transcript: "' + transcriptFormatted + '"');
             const messageMode = extension_settings.speech_recognition.messageMode;
             console.debug(DEBUG_PREFIX + 'mode: ' + messageMode);
@@ -321,6 +321,7 @@ async function processTranscript(transcript) {
 
             switch (messageMode) {
                 case 'auto_send':
+                    console.debug('Sending message: ' + transcriptFormatted);
                     // clear message area to avoid double message
                     textarea.val('')[0].dispatchEvent(new Event('input', { bubbles: true }));
 
