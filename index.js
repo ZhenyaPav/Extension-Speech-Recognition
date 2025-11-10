@@ -197,24 +197,24 @@ function updateVolumeIndicator(volumeData) {
     // Energy values are typically very small, so we use log scale
     const logEnergy = Math.log10(Math.max(1e-10, volumeData.energy));
     
-    // Calculate threshold based on current VAD settings
-    let thresholdForDisplay;
-    if (extension_settings.speech_recognition.adaptiveVad) {
-        // Use the actual threshold from VAD when adaptive mode is on
-        thresholdForDisplay = volumeData.threshold;
-    } else {
-        // Calculate static threshold when adaptive mode is off
-        // Use same logarithmic scale logic as VAD for consistency
-        const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
-        // Map sensitivity (0-1) to log energy range: -8 (high sensitivity) to -2 (low sensitivity)
-        const minLog = -8;
-        const maxLog = -2;
-        const targetLogEnergy = minLog + (sensitivity * (maxLog - minLog));
-        const fixedThreshold = Math.pow(10, targetLogEnergy);
-        
-        // Use the same threshold calculation as VAD for non-adaptive mode
-        thresholdForDisplay = fixedThreshold * 0.5; // Signal must be 50% above threshold
-    }
+        // Calculate threshold based on current VAD settings
+        let thresholdForDisplay;
+        if (extension_settings.speech_recognition.adaptiveVad) {
+            // Use the actual threshold from VAD when adaptive mode is on
+            thresholdForDisplay = volumeData.threshold;
+        } else {
+            // Calculate static threshold when adaptive mode is off
+            // Use same logarithmic scale logic as VAD for consistency
+            const sensitivity = extension_settings.speech_recognition.vadSensitivity !== undefined ? extension_settings.speech_recognition.vadSensitivity : 0.5;
+            // Map sensitivity (0-1) to log energy range: -8 (high sensitivity) to -2 (low sensitivity)
+            const minLog = -8;
+            const maxLog = -2;
+            const targetLogEnergy = minLog + (sensitivity * (maxLog - minLog));
+            const fixedThreshold = Math.pow(10, targetLogEnergy);
+            
+            // Use the same threshold calculation as VAD for non-adaptive mode
+            thresholdForDisplay = fixedThreshold * 0.5; // Signal must be 50% above threshold
+        }
     
     const logThreshold = Math.log10(Math.max(1e-10, thresholdForDisplay));
     const minLog = -8; // Minimum expected log energy
@@ -242,7 +242,7 @@ function updateVolumeIndicator(volumeData) {
     
     // Update text with more detailed information
     if (volumeText.length > 0) {
-        const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
+        const sensitivity = extension_settings.speech_recognition.vadSensitivity !== undefined ? extension_settings.speech_recognition.vadSensitivity : 0.5;
         let statusText = `Volume: ${Math.round(volumePercent)}%`;
         
         if (volumeData.willTrigger) {
@@ -267,7 +267,7 @@ function updateVolumeIndicator(volumeData) {
             signal: volumeData.signal.toExponential(2),
             willTrigger: volumeData.willTrigger,
             currentState: volumeData.currentState,
-            sensitivity: (extension_settings.speech_recognition.vadSensitivity || 0.5).toFixed(2)
+            sensitivity: (extension_settings.speech_recognition.vadSensitivity !== undefined ? extension_settings.speech_recognition.vadSensitivity : 0.5).toFixed(2)
         });
     }
 }
@@ -368,7 +368,7 @@ function loadNavigatorAudioRecording() {
             const source = audioContext.createMediaStreamSource(stream);
             
             // Get VAD settings from defaults if not set
-            const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
+            const sensitivity = extension_settings.speech_recognition.vadSensitivity !== undefined ? extension_settings.speech_recognition.vadSensitivity : 0.5;
             const adaptiveVad = extension_settings.speech_recognition.adaptiveVad !== false; // Default to true
             
             // Calculate threshold for non-adaptive mode
@@ -738,7 +738,7 @@ function loadSettings() {
     $('#speech_recognition_voice_activation_enabled').prop('checked', extension_settings.speech_recognition.voiceActivationEnabled);
     
     // Load VAD sensitivity setting
-    const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
+    const sensitivity = extension_settings.speech_recognition.vadSensitivity !== undefined ? extension_settings.speech_recognition.vadSensitivity : 0.5;
     $('#speech_recognition_vad_sensitivity').val(sensitivity);
     $('#speech_recognition_vad_sensitivity_value').text(sensitivity.toFixed(2));
     
@@ -759,8 +759,8 @@ function loadSettings() {
     const adaptiveVad = extension_settings.speech_recognition.adaptiveVad !== false; // Default to true
     $('#speech_recognition_adaptive_vad').prop('checked', adaptiveVad);
     
-    // Show/hide sensitivity slider based on adaptive VAD setting
-    $('#speech_recognition_vad_sensitivity_div').toggle(!adaptiveVad);
+    // Always show sensitivity slider since it affects both adaptive and non-adaptive modes
+    $('#speech_recognition_vad_sensitivity_div').show();
 }
 
 async function onMessageModeChange() {
@@ -836,8 +836,8 @@ function onAdaptiveVadChange() {
     const enabled = !!$('#speech_recognition_adaptive_vad').prop('checked');
     extension_settings.speech_recognition.adaptiveVad = enabled;
     
-    // Show/hide sensitivity slider based on adaptive VAD setting
-    $('#speech_recognition_vad_sensitivity_div').toggle(!enabled);
+    // Always show sensitivity slider since it affects both adaptive and non-adaptive modes
+    $('#speech_recognition_vad_sensitivity_div').show();
     
     // Restart VAD instance with new settings if voice activation is enabled
     if (extension_settings.speech_recognition.voiceActivationEnabled && mediaStream) {
@@ -847,7 +847,7 @@ function onAdaptiveVadChange() {
         }
         
         // Recreate VAD with updated settings
-        const sensitivity = extension_settings.speech_recognition.vadSensitivity || 0.5;
+        const sensitivity = extension_settings.speech_recognition.vadSensitivity !== undefined ? extension_settings.speech_recognition.vadSensitivity : 0.5;
         const adaptiveVad = enabled;
         
         // Calculate threshold for non-adaptive mode
