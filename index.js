@@ -8,6 +8,7 @@ import { getContext, extension_settings, ModuleWorkerWrapper } from '../../../ex
 import { VoskSttProvider } from './vosk.js';
 import { WhisperExtrasSttProvider } from './whisper-extras.js';
 import { OpenAISttProvider } from './whisper-openai.js';
+import { CustomOpenAISttProvider } from './whisper-custom.js';
 import { WhisperLocalSttProvider } from './whisper-local.js';
 import { BrowserSttProvider } from './browser.js';
 import { StreamingSttProvider } from './streaming.js';
@@ -36,6 +37,7 @@ let sttProviders = {
     'KoboldCpp': KoboldCppSttProvider,
     'MistralAI': MistralSttProvider,
     'OpenAI': OpenAISttProvider,
+    'OpenAI Compatible': CustomOpenAISttProvider,
     'Whisper (Extras)': WhisperExtrasSttProvider,
     'Whisper (Local)': WhisperLocalSttProvider,
     'Z.AI': ZaiSttProvider,
