@@ -13,10 +13,13 @@ export class CustomOpenAISttProvider extends SttBaseProvider {
         <div class="flex-container flexFlowColumn">
             <label for="custom_stt_url">Transcription endpoint URL</label>
             <input id="custom_stt_url" class="text_pole" type="text" placeholder="http://127.0.0.1:8080/v1/audio/transcriptions">
-            <label for="custom_stt_model">Model</label>
-            <input id="custom_stt_model" class="text_pole" type="text" list="custom_stt_models" placeholder="qwen3-asr">
-            <datalist id="custom_stt_models"></datalist>
+            <label for="custom_stt_models">Model</label>
+            <select id="custom_stt_models" class="text_pole">
+                <option value="">Select a loaded model</option>
+            </select>
             <button type="button" id="custom_stt_refresh_models" class="menu_button">Load models</button>
+            <label for="custom_stt_model">Model ID (editable)</label>
+            <input id="custom_stt_model" class="text_pole" type="text" placeholder="qwen3-asr">
             <label for="custom_stt_key">API key (optional; cleared when switching providers or reloading)</label>
             <input id="custom_stt_key" class="text_pole" type="password" autocomplete="off">
             <small>Direct URLs require CORS. To use SillyTavern's CORS proxy, enable enableCorsProxy in config.yaml and prefix the URL with /proxy/.</small>
@@ -29,14 +32,22 @@ export class CustomOpenAISttProvider extends SttBaseProvider {
         $('#custom_stt_url').val(this.settings.url);
         $('#custom_stt_model').val(this.settings.model);
         $('#custom_stt_key').val(this.apiKey);
+        $('#custom_stt_models').val(this.settings.model);
+        if (!$('#custom_stt_models').val()) $('#custom_stt_models').val('');
+        $('#custom_stt_models').off('input').on('input', () => {
+            const model = $('#custom_stt_models').val();
+            if (model) $('#custom_stt_model').val(model);
+        });
         $('#custom_stt_refresh_models').off('click').on('click', () => this.loadModels());
     }
 
     onSettingsChange() {
         const url = String($('#custom_stt_url').val()).trim();
-        if (url !== this.settings.url) $('#custom_stt_models').empty();
+        if (url !== this.settings.url) $('#custom_stt_models option:not(:first)').remove();
         this.settings.url = url;
         this.settings.model = String($('#custom_stt_model').val()).trim();
+        $('#custom_stt_models').val(this.settings.model);
+        if (!$('#custom_stt_models').val()) $('#custom_stt_models').val('');
         this.apiKey = String($('#custom_stt_key').val());
     }
 
@@ -59,13 +70,15 @@ export class CustomOpenAISttProvider extends SttBaseProvider {
             const result = await response.json();
             if (!Array.isArray(result.data)) throw new Error('Invalid model list response');
             if (endpoint !== this.settings.url || list[0] !== document.getElementById('custom_stt_models')) return;
-            list.empty();
+            list.find('option:not(:first)').remove();
             for (const model of result.data) {
                 if (typeof model?.id === 'string' && model.id) {
-                    list.append($('<option>').val(model.id));
+                    list.append($('<option>').val(model.id).text(model.id));
                 }
             }
-            toastr.info('Select a model from the Model field, or enter one manually.', 'Models loaded');
+            list.val(this.settings.model);
+            if (!list.val()) list.val('');
+            toastr.info('Select a model from the dropdown, or enter a Model ID manually.', 'Models loaded');
         } catch (error) {
             console.error('Could not load transcription models', error);
             toastr.error('Check the endpoint, API key, and server CORS settings. You can still enter a model manually.', 'Could not load models');
