@@ -12,14 +12,14 @@ export class CustomOpenAISttProvider extends SttBaseProvider {
         return `
         <div class="flex-container flexFlowColumn">
             <label for="custom_stt_url">Transcription endpoint URL</label>
-            <input id="custom_stt_url" class="text_pole" type="url" placeholder="http://127.0.0.1:8080/v1/audio/transcriptions">
+            <input id="custom_stt_url" class="text_pole" type="text" placeholder="http://127.0.0.1:8080/v1/audio/transcriptions">
             <label for="custom_stt_model">Model</label>
             <input id="custom_stt_model" class="text_pole" type="text" list="custom_stt_models" placeholder="qwen3-asr">
             <datalist id="custom_stt_models"></datalist>
             <button type="button" id="custom_stt_refresh_models" class="menu_button">Load models</button>
             <label for="custom_stt_key">API key (optional; cleared when switching providers or reloading)</label>
             <input id="custom_stt_key" class="text_pole" type="password" autocomplete="off">
-            <small>The server must allow browser requests from SillyTavern's origin (CORS).</small>
+            <small>Direct URLs require CORS. To use SillyTavern's CORS proxy, enable enableCorsProxy in config.yaml and prefix the URL with /proxy/.</small>
         </div>`;
     }
 
@@ -46,7 +46,7 @@ export class CustomOpenAISttProvider extends SttBaseProvider {
         const endpoint = this.settings.url;
         button.prop('disabled', true);
         try {
-            const url = new URL(endpoint);
+            const url = new URL(endpoint, window.location.origin);
             if (!['http:', 'https:'].includes(url.protocol) || !/\/audio\/transcriptions\/?$/.test(url.pathname)) {
                 throw new Error('The transcription URL must end in /audio/transcriptions');
             }
@@ -75,7 +75,7 @@ export class CustomOpenAISttProvider extends SttBaseProvider {
     }
 
     async processAudio(audioBlob) {
-        const url = new URL(this.settings.url);
+        const url = new URL(this.settings.url, window.location.origin);
         if (!['http:', 'https:'].includes(url.protocol) || !this.settings.model) {
             throw new Error('A valid HTTP(S) transcription URL and model are required');
         }
